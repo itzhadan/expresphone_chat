@@ -1,0 +1,42 @@
+Launching lib/main.dart on Levi y danon 13 pro m ys in debug mode...
+Automatically signing iOS for device deployment using specified development team in Xcode project: ZBTR5D8W4S
+Running Xcode build...                                          
+Xcode build done.                                            7.2s
+Failed to build iOS app
+Could not build the precompiled application for the device.
+Error output from Xcode build:
+↳
+    ** BUILD FAILED **
+
+
+Xcode's output:
+↳
+    Writing result bundle at path:
+    	/var/folders/6c/ry9btwqx6bz8w7mz3s9qy6vr0000gn/T/flutter_tools.Pu4X31/flutter_ios_build_temp_dirzF16tO/temporary_xcresult_bundle
+
+    lib/main.dart:66:20: Error: Can't find ')' to match '('.
+        return Scaffold(
+                       ^
+    lib/main.dart:317:13: Error: Expected an identifier, but got ')'.
+    Try inserting an identifier before ')'.
+                ),
+                ^
+    lib/main.dart:317:13: Error: Expected ']' before this.
+                ),
+                ^
+    Target kernel_snapshot_program failed: Exception
+    Failed to package /Users/leviydanon/expresphone_chat.
+    Command PhaseScriptExecution failed with a nonzero exit code
+    /Users/leviydanon/expresphone_chat/ios/Pods/Pods.xcodeproj: warning: The iOS deployment target 'IPHONEOS_DEPLOYMENT_TARGET' is set to 9.0, but the range of supported deployment target versions is 12.0 to 26.5.99. (in target 'SDWebImage-SDWebImage' from project 'Pods')
+    /Users/leviydanon/expresphone_chat/ios/Pods/Pods.xcodeproj: warning: The iOS deployment target 'IPHONEOS_DEPLOYMENT_TARGET' is set to 9.0, but the range of supported deployment target versions is 12.0 to 26.5.99. (in target 'SwiftyGif-SwiftyGif' from project 'Pods')
+    /Users/leviydanon/expresphone_chat/ios/Pods/Pods.xcodeproj: warning: The iOS deployment target 'IPHONEOS_DEPLOYMENT_TARGET' is set to 9.0, but the range of supported deployment target versions is 12.0 to 26.5.99. (in target 'SDWebImage' from project 'Pods')
+    /Users/leviydanon/expresphone_chat/ios/Pods/Pods.xcodeproj: warning: The iOS deployment target 'IPHONEOS_DEPLOYMENT_TARGET' is set to 9.0, but the range of supported deployment target versions is 12.0 to 26.5.99. (in target 'SwiftyGif' from project 'Pods')
+    /Users/leviydanon/expresphone_chat/ios/Pods/Pods.xcodeproj: warning: The iOS deployment target 'IPHONEOS_DEPLOYMENT_TARGET' is set to 9.0, but the range of supported deployment target versions is 12.0 to 26.5.99. (in target 'DKPhotoGallery-DKPhotoGallery' from project 'Pods')
+    /Users/leviydanon/expresphone_chat/ios/Pods/Pods.xcodeproj: warning: The iOS deployment target 'IPHONEOS_DEPLOYMENT_TARGET' is set to 9.0, but the range of supported deployment target versions is 12.0 to 26.5.99. (in target 'DKPhotoGallery' from project 'Pods')
+    /Users/leviydanon/expresphone_chat/ios/Pods/Pods.xcodeproj: warning: The iOS deployment target 'IPHONEOS_DEPLOYMENT_TARGET' is set to 9.0, but the range of supported deployment target versions is 12.0 to 26.5.99. (in target 'DKImagePickerController-DKImagePickerController' from project 'Pods')
+    /Users/leviydanon/expresphone_chat/ios/Pods/Pods.xcodeproj: warning: The iOS deployment target 'IPHONEOS_DEPLOYMENT_TARGET' is set to 9.0, but the range of supported deployment target versions is 12.0 to 26.5.99. (in target 'DKImagePickerController' from project 'Pods')
+    note: Run script build phase 'Run Script' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'Runner' from project 'Runner')
+    note: Run script build phase 'Thin Binary' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'Runner' from project 'Runner')
+
+
+Error launching application on Levi y danon 13 pro m ys.
