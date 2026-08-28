@@ -43,3 +43,22 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local / generated files
+android/build/
+backups/
+ios_backup_*/
+*.ipa
+lib/main_before_codex.dart
+
+# Secrets
+android/app/google-services.json
+
+# Flutter generated
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# macOS
+.DS_Store
