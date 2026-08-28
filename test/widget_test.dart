@@ -14,8 +14,7 @@ void main() {
     await tester.pumpWidget(const ExpresphoneApp());
     await tester.pump();
 
-    expect(find.text('yvohana'), findsOneWidget);
-    expect(find.text('LOGIN'), findsWidgets);
-    expect(find.text('AFRICA'), findsOneWidget);
+    expect(find.text('PIN'), findsAtLeastNWidgets(1));
+    expect(find.text('כניסה'), findsAtLeastNWidgets(1));
   });
 }

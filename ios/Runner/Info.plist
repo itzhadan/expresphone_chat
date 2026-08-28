@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Expresphone Chat</string>
+	<string>CozyCrafts</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>expresphone_chat</string>
+	<string>CozyCrafts</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -26,6 +26,8 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>צריך גישה למיקרופון כדי להקליט הודעה קולית, לתמלל ולתרגם אותה לעברית.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -66,5 +68,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>האפליקציה צריכה גישה למצלמה כדי לצלם ולשלוח תמונות</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>האפליקציה משתמשת במיקום כדי לשלוח אותו ללקוח</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>האפליקציה צריכה גישה לגלריה כדי לשלוח תמונות וסרטונים</string>
 </dict>
 </plist>
