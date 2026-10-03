@@ -1,5 +1,7 @@
 import 'dart:async';
+
 import 'cozy_pdf_page.dart';
+
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -27,9 +29,9 @@ import 'package:local_auth/local_auth.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 const String api = "https://arnonidan.pythonanywhere.com";
-const String appPin = "6044"; // PIN ניהול
 const List<String> accessUsers = [
   "admin",
   "יבואן 1",
@@ -41,6 +43,7 @@ const List<String> accessUsers = [
   "יבואן 7",
   "יבואן 8",
   "יבואן 9",
+  "עידן",
 ];
 const List<String> visibleAccessUsers = [
   "יבואן 1",
@@ -52,6 +55,7 @@ const List<String> visibleAccessUsers = [
   "יבואן 7",
   "יבואן 8",
   "יבואן 9",
+  "עידן",
 ];
 const Map<String, String> accessUserLabels = {
   "admin": "",
@@ -64,23 +68,39 @@ const Map<String, String> accessUserLabels = {
   "יבואן 7": "יבואן 7",
   "יבואן 8": "יבואן 8",
   "יבואן 9": "יבואן 9",
+  "עידן": "עידן הנהלה",
 };
-// PIN נפרד לכל משתמש (חייב להתאים ל-ACCESS_USER_CODES בשרת)
-const Map<String, String> accessUserPins = {
-  "admin": "6044",
-  "יבואן 1": "1938",
-  "יבואן 2": "4681",
-  "יבואן 3": "7256",
-  "יבואן 4": "9147",
-  "יבואן 5": "3572",
-  "יבואן 6": "8014",
-  "יבואן 7": "2967",
-  "יבואן 8": "5493",
-  "יבואן 9": "7820",
-};
+// "admin" הוא האדמין הראשי. "עידן" (הנהלה) מנהל הכול, אבל לא רואה את admin
+// ולא רואה את המתג של Cozy AI.
+const Set<String> managerUsers = {"admin", "עידן"};
+bool isManagerUser(String user) => managerUsers.contains(user);
+bool isSuperAdminUser(String user) => user == "admin";
 String accessUserLabel(String user) => accessUserLabels[user] ?? user;
-bool checkUserPin(String user, String pin) =>
-    (accessUserPins[user] ?? appPin) == pin.trim();
+// קודי הכניסה לא נמצאים באפליקציה. הקוד נבדק בשרת בלבד.
+// הקוד של המשתמש שהתחבר נשמר בזיכרון בלבד, ובאחסון מוצפן אם הופעל ביומטרי.
+final Map<String, String> _sessionPins = {};
+String userPin(String user) => _sessionPins[user] ?? "";
+const FlutterSecureStorage _secure = FlutterSecureStorage();
+Future<void> savePinSecurely(String user, String pin) async {
+  try {
+    await _secure.write(key: "pin_$user", value: pin);
+  } catch (_) {}
+}
+
+Future<String?> loadSavedPin(String user) async {
+  try {
+    return await _secure.read(key: "pin_$user");
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<void> clearSavedPin(String user) async {
+  try {
+    await _secure.delete(key: "pin_$user");
+  } catch (_) {}
+}
+
 String mediaUrl(String value) {
   final url = value.trim();
   if (url.isEmpty || url.startsWith("http://") || url.startsWith("https://")) {
@@ -671,7 +691,7 @@ Future<void> registerPushToken(String token, {String? userName}) async {
                 ? "android"
                 : "other",
             "user": userName ?? "",
-            "pin": appPin,
+            "pin": userPin(userName ?? ""),
           }),
         )
         .timeout(const Duration(seconds: 8));
@@ -1028,6 +1048,30 @@ const List<AfricaCountryPosition> africaCountryPositions = [
     labelX: 0.895,
     labelY: 0.595,
   ),
+  AfricaCountryPosition(
+    "jamaica",
+    "Jamaica",
+    0.294,
+    0.402,
+    labelX: 0.220,
+    labelY: 0.450,
+  ),
+  AfricaCountryPosition(
+    "ethiopia",
+    "Ethiopia",
+    0.608,
+    0.452,
+    labelX: 0.780,
+    labelY: 0.475,
+  ),
+  AfricaCountryPosition(
+    "angola",
+    "Angola",
+    0.550,
+    0.568,
+    labelX: 0.460,
+    labelY: 0.805,
+  ),
 ];
 
 // ===== Realtime (WebSocket) - אותו ערוץ Supabase שהאתר כבר מאזין לו =====
@@ -1199,7 +1243,116 @@ class ExpresphoneApp extends StatelessWidget {
           scaffoldBackgroundColor: const Color(0xff040c18),
           fontFamily: '.SF Pro Display',
         ),
-        home: const PinPage(),
+        home: const IntroSplashPage(),
+      ),
+    );
+  }
+}
+
+// =========================================================
+// סרטון פתיחה — מהחלל אל העיר, ובסוף "Cozycrafts"
+// הקובץ: assets/intro.mp4 (צריך להופיע ב-pubspec.yaml תחת flutter: assets:)
+// =========================================================
+class IntroSplashPage extends StatefulWidget {
+  const IntroSplashPage({super.key});
+
+  @override
+  State<IntroSplashPage> createState() => _IntroSplashPageState();
+}
+
+class _IntroSplashPageState extends State<IntroSplashPage> {
+  VideoPlayerController? _ctrl;
+  bool _done = false;
+  Timer? _fallback;
+
+  @override
+  void initState() {
+    super.initState();
+    // אם משהו נתקע — לא משאירים את המשתמש במסך הפתיחה
+    _fallback = Timer(const Duration(seconds: 10), _finish);
+    _start();
+  }
+
+  Future<void> _start() async {
+    try {
+      final c = VideoPlayerController.asset("assets/intro.mp4");
+      _ctrl = c;
+      await c.initialize();
+      await c.setVolume(0);
+      c.addListener(() {
+        final v = c.value;
+        if (v.isInitialized &&
+            v.duration > Duration.zero &&
+            v.position >= v.duration - const Duration(milliseconds: 150)) {
+          _finish();
+        }
+      });
+      if (!mounted) return;
+      setState(() {});
+      await c.play();
+    } catch (e) {
+      debugPrint("INTRO VIDEO ERROR: $e");
+      _finish();
+    }
+  }
+
+  void _finish() {
+    if (_done || !mounted) return;
+    _done = true;
+    _fallback?.cancel();
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 600),
+        pageBuilder: (_, __, ___) => const PinPage(),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _fallback?.cancel();
+    _ctrl?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = _ctrl;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _finish, // נגיעה במסך מדלגת על הפתיחה
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (c != null && c.value.isInitialized)
+              FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: c.value.size.width,
+                  height: c.value.size.height,
+                  child: VideoPlayer(c),
+                ),
+              ),
+            Positioned(
+              bottom: 36,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Text(
+                  "נגיעה לדילוג",
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1275,6 +1428,34 @@ class _PinPageState extends State<PinPage> {
       }
       final auth = await askFaceUnlock();
       if (auth && mounted) {
+        final saved = await loadSavedPin(selectedUser);
+        if (saved == null || saved.isEmpty) {
+          if (mounted) {
+            setState(
+              () => error =
+                  "הקוד לא שמור במכשיר. היכנס עם קוד, ובטל והפעל מחדש את $biometricName.",
+            );
+          }
+          return;
+        }
+        // מוודא מול השרת שהקוד השמור עדיין תקף
+        final check = await http
+            .post(
+              Uri.parse("$api/api/check_user"),
+              headers: {"Content-Type": "application/json"},
+              body: jsonEncode({"user": selectedUser, "pin": saved}),
+            )
+            .timeout(const Duration(seconds: 8));
+        final checkData = jsonDecode(check.body);
+        if (checkData["ok"] != true) {
+          await clearSavedPin(selectedUser);
+          if (mounted) {
+            setState(() => error = "הקוד השתנה. היכנס עם הקוד החדש.");
+          }
+          return;
+        }
+        _sessionPins[selectedUser] = saved;
+        if (!mounted) return;
         unawaited(setupPushNotifications(userName: selectedUser));
         Navigator.pushReplacement(
           context,
@@ -1316,13 +1497,11 @@ class _PinPageState extends State<PinPage> {
         SystemSound.play(SystemSoundType.alert);
         return;
       }
+      _sessionPins[selectedUser] = pin.text.trim();
     } catch (_) {
-      // אם השרת לא זמין — מאפשר כניסה מקומית (גיבוי אופליין) לפי טבלת ה-PIN המקומית
-      if (!checkUserPin(selectedUser, pin.text)) {
-        setState(() => error = "אין חיבור לשרת, ולא ניתן לאמת מקומית");
-        SystemSound.play(SystemSoundType.alert);
-        return;
-      }
+      setState(() => error = "אין חיבור לשרת. נסה שוב.");
+      SystemSound.play(SystemSoundType.alert);
+      return;
     } finally {
       if (mounted) setState(() => checkingLogin = false);
     }
@@ -2493,6 +2672,10 @@ String _flagForCountry(String code) {
       return "🇸🇿";
     case "ethiopia":
       return "🇪🇹";
+    case "jamaica":
+      return "🇯🇲";
+    case "pending":
+      return "⏳";
     case "gabon":
       return "🇬🇦";
     case "gambia":
@@ -2639,6 +2822,10 @@ String _countryNameHebrew(String code, [String fallback = ""]) {
     "mozambique": "מוזמביק",
     "solomon_islands": "איי שלמה",
     "dr_congo": "קונגו הדמוקרטית",
+    "jamaica": "ג׳מייקה",
+    "ethiopia": "אתיופיה",
+    "angola": "אנגולה",
+    "pending": "ממתינים לבחירת מדינה",
   };
   final value = names[clean];
   if (value != null) return value;
@@ -2678,7 +2865,7 @@ class _SavedLocationsPageState extends State<SavedLocationsPage> {
             headers: {"Content-Type": "application/json"},
             body: jsonEncode({
               "user": widget.currentUser,
-              "pin": accessUserPins[widget.currentUser] ?? appPin,
+              "pin": userPin(widget.currentUser),
             }),
           )
           .timeout(const Duration(seconds: 10));
@@ -2993,13 +3180,27 @@ class _SavedLocationsPageState extends State<SavedLocationsPage> {
   }
 }
 
+class _VoiceResult {
+  final String text;
+  final int failed;
+  const _VoiceResult(this.text, this.failed);
+}
+
+/// A transcription that must stop (expired job, server error): shown to the user as is.
+class _VoiceStop implements Exception {
+  final String message;
+  const _VoiceStop(this.message);
+}
+
 // ===== Cozy AI =====
 const String cozyAiApi = "https://ai.expresphone.com/api/ai";
 const String cozyAiVoiceApi =
     "https://ai.expresphone.com/api/voice/transcribe-client";
+const String cozyAiVoiceJobsApi = "https://ai.expresphone.com/api/voice/jobs";
 
 class CozyAiPage extends StatefulWidget {
-  const CozyAiPage({super.key});
+  const CozyAiPage({super.key, this.currentUser = ""});
+  final String currentUser;
 
   @override
   State<CozyAiPage> createState() => _CozyAiPageState();
@@ -3008,8 +3209,22 @@ class CozyAiPage extends StatefulWidget {
 class _CozyAiPageState extends State<CozyAiPage> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
+  // מה ה-AI יודע לעשות: מוצג בתחילת כל שיחה
+  static const String _capabilities =
+      "💬 לענות על שאלות ולהסביר מה לעשות\n"
+      "🖼️ לנתח תמונה של תקלה או של הודעת שגיאה\n"
+      "🎙️ להקליט הודעה או לתמלל קובץ שמע — עד 20 דקות, תמיד בעברית (גם משפה אחרת)\n"
+      "🎥 וידאו: תמלול בלבד, או תמלול + הסבר של מה שרואים — עד 20 דקות ו-60 מגה\n"
+      "🗣️ לדבר בעברית ולקבל קובץ שמע בשפה אחרת (אנגלית, רוסית, ערבית ועוד)\n"
+      "📧 לשלוח תשובה במייל או בוואטסאפ (כפתור מתחת לתשובה, או לכתוב \"שלח לי במייל\")\n"
+      "📄 לערוך PDF: החלפת טקסט וטיוטה לשיתוף\n"
+      "🕘 לשמור את השיחות שלך ולחזור אליהן\n\n"
+      "לחץ על 📎 כדי להוסיף תמונה, וידאו, הקלטה, קובץ קול או PDF.";
   final List<Map<String, String>> _messages = [
-    {"role": "assistant", "text": "שלום 👋 אני Cozy AI. איך אפשר לעזור?"},
+    {
+      "role": "assistant",
+      "text": "שלום 👋 אני Cozy AI. זה מה שאני יודע לעשות:\n\n$_capabilities",
+    },
   ];
 
   bool _busy = false;
@@ -3017,8 +3232,260 @@ class _CozyAiPageState extends State<CozyAiPage> {
   int _pickGeneration = 0;
   bool _picking = false;
   String? _pendingImage;
+  // וידאו מצורף: התמלול ופרטי הסרטון, נשלחים למודל יחד עם לוח התמונות (_pendingImage)
+  String? _pendingVideoNote;
+  // התמלול של הווידאו: מוצג למשתמש בראש התשובה
+  String? _pendingVideoTranscript;
+  // דבר בעברית -> קול בשפה אחרת: הטקסט בעברית שמחכה לבחירת שפה
+  String? _pendingSpeakText;
+  final AudioPlayer _speakPlayer = AudioPlayer();
+  StreamSubscription<void>? _speakDone;
+  String? _playingPath;
   String _mode = "auto";
   http.Client? _client;
+
+  // ---- שיחות שמורות בשרת Cozy (לפי המשתמש המחובר, משותף לאתר ולאפליקציה) ----
+  static const String _greeting =
+      "שיחה חדשה 👋 זה מה שאני יודע לעשות:\n\n$_capabilities";
+  int? _conversationId;
+  Future<void> _saveQueue = Future.value();
+  // הקשר השיחה (בלי הודעת הפתיחה) - נשלח למודל עם כל שאלה
+  final List<Map<String, String>> _ctx = [];
+
+  Map<String, String> _historyHeaders() => {
+    "Content-Type": "application/json",
+    // שם המשתמש בעברית ("יבואן 1") נשלח ב-base64 כדי שלא ישתבש בכותרת HTTP
+    "X-App-User-B64": base64Encode(utf8.encode(widget.currentUser)),
+    "X-App-Pin": userPin(widget.currentUser),
+    // שאר הקריאות לשרת שולחות את השם רגיל; שם באנגלית (admin) נשלח גם כך
+    if (RegExp(r'^[\x20-\x7E]+$').hasMatch(widget.currentUser))
+      "X-App-User": widget.currentUser,
+  };
+
+  Future<Map<String, dynamic>> _historyCall(
+    String method,
+    String path, {
+    Object? body,
+  }) async {
+    final headers = _historyHeaders();
+    final payload = body == null ? null : jsonEncode(body);
+    // שרת ה-AI הוא ai.expresphone.com; שרת האפליקציה הראשי כגיבוי
+    final aiBase = cozyAiApi.replaceFirst(RegExp(r'/api/ai/?$'), '');
+    final bases = <String>[aiBase, api];
+    final errors = <String>[];
+    for (final base in bases) {
+      try {
+        final uri = Uri.parse("$base$path");
+        late http.Response r;
+        if (method == "POST") {
+          r = await http
+              .post(uri, headers: headers, body: payload)
+              .timeout(const Duration(seconds: 20));
+        } else if (method == "DELETE") {
+          r = await http
+              .delete(uri, headers: headers)
+              .timeout(const Duration(seconds: 20));
+        } else {
+          r = await http
+              .get(uri, headers: headers)
+              .timeout(const Duration(seconds: 20));
+        }
+        final data = jsonDecode(utf8.decode(r.bodyBytes));
+        if (r.statusCode < 200 ||
+            r.statusCode >= 300 ||
+            data is! Map ||
+            data["ok"] == false) {
+          final msg = data is Map ? "${data["error"] ?? "error"}" : "error";
+          throw Exception("${Uri.parse(base).host} ${r.statusCode}: $msg");
+        }
+        return Map<String, dynamic>.from(data);
+      } catch (e) {
+        errors.add("${e.toString().replaceFirst("Exception: ", "")}");
+      }
+    }
+    throw Exception(errors.join("\n"));
+  }
+
+  Future<int?> _ensureConversation() async {
+    if (_conversationId != null) return _conversationId;
+    if (widget.currentUser.isEmpty) return null;
+    try {
+      final data = await _historyCall(
+        "POST",
+        "/api/ai/conversations",
+        body: {"model": _mode},
+      );
+      final id = data["id"];
+      if (id is num) _conversationId = id.toInt();
+    } catch (_) {}
+    return _conversationId;
+  }
+
+  void _saveMessage(String role, String content, {bool hasImage = false}) {
+    final id = _conversationId;
+    if (id == null || content.trim().isEmpty) return;
+    _saveQueue = _saveQueue.then((_) async {
+      try {
+        await _historyCall(
+          "POST",
+          "/api/ai/conversations/$id/messages",
+          body: {
+            "role": role,
+            "content": content,
+            "has_image": hasImage ? 1 : 0,
+          },
+        );
+      } catch (_) {}
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> _loadConversations() async {
+    final data = await _historyCall("GET", "/api/ai/conversations");
+    final list = data["conversations"];
+    if (list is! List) return [];
+    return list
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
+        .toList();
+  }
+
+  void _newConversation() {
+    _stop();
+    _pickGeneration++;
+    setState(() {
+      _conversationId = null;
+      _ctx.clear();
+      _saveQueue = Future.value();
+      _pendingImage = null;
+      _pendingVideoNote = null;
+        _pendingVideoTranscript = null;
+      _pendingSpeakText = null;
+      _picking = false;
+      _messages
+        ..clear()
+        ..add({"role": "assistant", "text": _greeting});
+    });
+  }
+
+  Future<void> _openConversation(int id) async {
+    _stop();
+    _pickGeneration++;
+    try {
+      final data = await _historyCall("GET", "/api/ai/conversations/$id");
+      final msgs = data["messages"];
+      if (!mounted) return;
+      setState(() {
+        _conversationId = id;
+        _saveQueue = Future.value();
+        _ctx.clear();
+        _pendingImage = null;
+        _pendingVideoNote = null;
+        _pendingVideoTranscript = null;
+        _pendingSpeakText = null;
+        _picking = false;
+        _messages.clear();
+        if (msgs is List) {
+          for (final m in msgs) {
+            if (m is! Map) continue;
+            final role = "${m["role"]}" == "user" ? "user" : "assistant";
+            final content = "${m["content"] ?? ""}";
+            _messages.add({
+              "role": role,
+              "text": (m["has_image"] == true ? "🖼️ " : "") + content,
+            });
+            _ctx.add({"role": role, "content": content});
+          }
+        }
+        if (_messages.isEmpty) {
+          _messages.add({"role": "assistant", "text": _greeting});
+        }
+      });
+      _toBottom();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("לא ניתן לפתוח את השיחה כרגע.")),
+      );
+    }
+  }
+
+  Future<void> _showHistory() async {
+    if (widget.currentUser.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("צריך להתחבר כדי לראות שיחות שמורות.")),
+      );
+      return;
+    }
+    final label = accessUserLabel(widget.currentUser);
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => _CozyAiHistorySheet(
+        userLabel: label.isEmpty ? widget.currentUser : label,
+        activeId: _conversationId,
+        load: _loadConversations,
+        remove: (id) async {
+          await _historyCall("DELETE", "/api/ai/conversations/$id");
+          if (id == _conversationId) {
+            _conversationId = null;
+            _ctx.clear();
+          }
+        },
+      ),
+    );
+    if (!mounted || picked == null) return;
+    if (picked < 0) {
+      _newConversation();
+    } else {
+      await _openConversation(picked);
+    }
+  }
+
+  void _showCozyGuide() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text(
+            "🤖 ברוכים הבאים ל־Cozy AI",
+            textDirection: TextDirection.rtl,
+          ),
+          content: const Text(
+            "אפשר להשתמש ב־Cozy AI כך:\n\n"
+            "💬 לשאול שאלה ולקבל תשובה\n"
+            "🖼️ לצרף תמונה לניתוח\n"
+            "📷 לצלם תמונה\n"
+            "🎙️ להקליט קול לתמלול\n"
+            "🎵 לצרף קובץ קול\n"
+            "📄 לערוך PDF\n"
+            "🕘 השיחות נשמרות, אפשר לחזור אליהן מסמל ההיסטוריה\n\n"
+            "כל האפשרויות נמצאות בתוך הסיכה 📎.",
+            textDirection: TextDirection.rtl,
+            style: TextStyle(fontSize: 16, height: 1.5),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("הבנתי, מתחילים"),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _speakDone = _speakPlayer.onPlayerComplete.listen((_) {
+      if (mounted) setState(() => _playingPath = null);
+    });
+    _showCozyGuide();
+  }
 
   @override
   void dispose() {
@@ -3027,6 +3494,8 @@ class _CozyAiPageState extends State<CozyAiPage> {
     _client?.close();
     _input.dispose();
     _scroll.dispose();
+    _speakDone?.cancel();
+    _speakPlayer.dispose();
     super.dispose();
   }
 
@@ -3078,7 +3547,11 @@ class _CozyAiPageState extends State<CozyAiPage> {
         );
       }
       if (!mounted || generation != _pickGeneration) return;
-      setState(() => _pendingImage = base64Encode(bytes));
+      setState(() {
+        _pendingImage = base64Encode(bytes);
+        _pendingVideoNote = null;
+        _pendingVideoTranscript = null;
+      });
     } catch (error) {
       if (!mounted || generation != _pickGeneration) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3096,15 +3569,815 @@ class _CozyAiPageState extends State<CozyAiPage> {
     }
   }
 
-  Future<void> _recordAiVoice() async {
+  static const int _voiceMaxMinutes = 20;
+  static const int _voiceFileLimit = 48 * 1024 * 1024;
+
+  /// One short piece of audio in a single request (about 2 minutes at most).
+  Future<String> _transcribeVoiceBytes(
+    List<int> bytes,
+    String filename,
+    MediaType type,
+  ) async {
+    final request = http.MultipartRequest("POST", Uri.parse(cozyAiVoiceApi));
+    request.headers["X-Xpressphone-Client"] = "cozy-mobile-v1";
+    request.fields["consent"] = "yes";
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        "file",
+        bytes,
+        filename: filename,
+        contentType: type,
+      ),
+    );
+    final response = await request.send().timeout(const Duration(seconds: 90));
+    final payload = jsonDecode(await response.stream.bytesToString());
+    if (response.statusCode < 200 ||
+        response.statusCode >= 300 ||
+        payload is! Map) {
+      throw FormatException(
+        payload is Map && "${payload["error"]}".trim().isNotEmpty
+            ? "${payload["error"]}"
+            : "התמלול לא הצליח.",
+      );
+    }
+    final text = "${payload["text"] ?? ""}".trim();
+    if (text.isEmpty) throw const FormatException("לא התקבל תמלול ברור.");
+    return text;
+  }
+
+  /// A long recording (up to 20 minutes): uploaded once as a job. The server splits it,
+  /// transcribes it piece by piece, and the app polls until the text is ready.
+  Future<_VoiceResult> _transcribeLongBytes(
+    List<int> bytes,
+    String filename,
+    MediaType type, {
+    void Function(String)? onProgress,
+  }) async {
+    onProgress?.call("מעלה את ההקלטה...");
+    final request = http.MultipartRequest(
+      "POST",
+      Uri.parse(cozyAiVoiceJobsApi),
+    );
+    request.headers["X-Xpressphone-Client"] = "cozy-mobile-v1";
+    request.fields["consent"] = "yes";
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        "file",
+        bytes,
+        filename: filename,
+        contentType: type,
+      ),
+    );
+    final response = await request.send().timeout(const Duration(minutes: 5));
+    final started = jsonDecode(await response.stream.bytesToString());
+    if (response.statusCode < 200 ||
+        response.statusCode >= 300 ||
+        started is! Map) {
+      throw FormatException(
+        started is Map && "${started["error"]}".trim().isNotEmpty
+            ? "${started["error"]}"
+            : "התמלול לא התחיל.",
+      );
+    }
+    final id = "${started["job_id"]}";
+    var misses = 0;
+    for (;;) {
+      await Future<void>.delayed(const Duration(seconds: 3));
+      if (!mounted) throw const _VoiceStop("בוטל.");
+      try {
+        final poll = await http
+            .get(
+              Uri.parse("$cozyAiVoiceJobsApi/$id"),
+              headers: const {"X-Xpressphone-Client": "cozy-mobile-v1"},
+            )
+            .timeout(const Duration(seconds: 20));
+        final info = jsonDecode(utf8.decode(poll.bodyBytes));
+        if (poll.statusCode == 404) {
+          throw const _VoiceStop("המשימה פגה. שלח את ההקלטה שוב.");
+        }
+        if (poll.statusCode < 200 || poll.statusCode >= 300 || info is! Map) {
+          throw StateError("poll failed");
+        }
+        misses = 0;
+        final status = "${info["status"]}";
+        if (status == "done") {
+          return _VoiceResult(
+            "${info["text"] ?? ""}".trim(),
+            (info["failed"] as num?)?.toInt() ?? 0,
+          );
+        }
+        if (status == "error") {
+          throw _VoiceStop("${info["error"] ?? "התמלול נכשל."}");
+        }
+        final total = (info["total"] as num?)?.toInt() ?? 0;
+        final done = (info["done"] as num?)?.toInt() ?? 0;
+        onProgress?.call(
+          total > 0
+              ? "מתמלל $done מתוך $total..."
+              : (status == "queued" ? "ממתין בתור..." : "מכין את ההקלטה..."),
+        );
+      } on _VoiceStop {
+        rethrow;
+      } catch (_) {
+        // a temporary network problem while polling: try again a few times
+        if (++misses >= 5) rethrow;
+      }
+    }
+  }
+
+  /// Short audio: one request. Long audio: a job. [seconds] is the length when it is known (recording).
+  Future<_VoiceResult> _transcribeAudioBytes(
+    List<int> bytes,
+    String filename,
+    MediaType type, {
+    double? seconds,
+    void Function(String)? onProgress,
+  }) async {
+    final small = seconds == null
+        ? bytes.length <= 700 * 1024
+        : (seconds <= 100 && bytes.length <= 1800 * 1024);
+    if (small) {
+      onProgress?.call("מתמלל את ההקלטה...");
+      return _VoiceResult(
+        await _transcribeVoiceBytes(bytes, filename, type),
+        0,
+      );
+    }
+    return _transcribeLongBytes(bytes, filename, type, onProgress: onProgress);
+  }
+
+  Future<T> _withVoiceProgress<T>(
+    String title,
+    Future<T> Function(ValueNotifier<String> progress) work,
+  ) async {
+    final progress = ValueNotifier<String>("מתחיל...");
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            title: Text(title, textDirection: TextDirection.rtl),
+            content: Row(
+              children: [
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 3),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: ValueListenableBuilder<String>(
+                    valueListenable: progress,
+                    builder: (_, text, __) =>
+                        Text(text, textDirection: TextDirection.rtl),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    try {
+      return await work(progress);
+    } finally {
+      if (mounted && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+      progress.dispose();
+    }
+  }
+
+  /// Short text: sent to the AI as a question (as before). Long text: shown as a message and copied.
+  Future<void> _deliverVoiceTranscript(_VoiceResult result) async {
+    final transcript = result.text.trim();
+    if (transcript.isEmpty) throw const FormatException("לא התקבל תמלול ברור.");
+    if (!mounted) return;
+    if (result.failed > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("${result.failed} קטעים לא תומללו (מסומנים בתמלול)."),
+        ),
+      );
+    }
+    if (transcript.length <= 1500) {
+      _input.text = transcript;
+      await _ask();
+      return;
+    }
+    final words = transcript.split(RegExp(r"\s+")).length;
+    await Clipboard.setData(ClipboardData(text: transcript));
+    if (!mounted) return;
+    setState(() {
+      _messages.add({
+        "role": "assistant",
+        "text": "📝 התמלול מוכן ($words מילים) והועתק ללוח:\n\n$transcript",
+      });
+    });
+    _toBottom();
+  }
+
+  Future<void> _pickAiAudioFile() async {
+    if (_busy || _picking) return;
+
+    setState(() => _picking = true);
+
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: [
+          "aac",
+          "aiff",
+          "amr",
+          "m4a",
+          "mp3",
+          "mp4",
+          "oga",
+          "ogg",
+          "opus",
+          "wav",
+          "webm",
+        ],
+        withData: true,
+      );
+
+      final file = result?.files.single;
+      if (file == null) return;
+
+      final ext = file.name.contains(".")
+          ? file.name.split(".").last.toLowerCase()
+          : "";
+
+      final bytes =
+          file.bytes ??
+          (file.path == null ? null : await File(file.path!).readAsBytes());
+
+      if (bytes == null || bytes.isEmpty) {
+        throw const FormatException("לא הצלחתי לקרוא את קובץ הקול.");
+      }
+
+      if (bytes.length > _voiceFileLimit) {
+        throw const FormatException(
+          "קובץ הקול גדול מדי. המגבלה היא 48MB (ועד 20 דקות).",
+        );
+      }
+
+      if (!mounted) return;
+
+      final approved =
+          await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text(
+                "תמלול קובץ קול",
+                textDirection: TextDirection.rtl,
+              ),
+              content: const Text(
+                "הקובץ (עד 20 דקות) יישלח ל-Google לתמלול ולתרגום לעברית. הוא אינו נשמר.",
+                textDirection: TextDirection.rtl,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text("ביטול"),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text("מאשר"),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!approved || !mounted) return;
+
+      final subtype =
+          const {
+            "mp3": "mpeg",
+            "m4a": "mp4",
+            "mp4": "mp4",
+            "oga": "ogg",
+            "opus": "ogg",
+          }[ext] ??
+          (ext.isEmpty ? "mpeg" : ext);
+      setState(() => _busy = true);
+      _VoiceResult transcript;
+      try {
+        transcript = await _withVoiceProgress(
+          "מתמלל קובץ קול",
+          (progress) => _transcribeAudioBytes(
+            bytes,
+            file.name,
+            MediaType("audio", subtype),
+            onProgress: (text) => progress.value = text,
+          ),
+        );
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      await _deliverVoiceTranscript(transcript);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error is FormatException
+                  ? error.message
+                  : (error is _VoiceStop
+                        ? error.message
+                        : "לא ניתן לעבד את קובץ הקול. נסה שוב."),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _picking = false);
+    }
+  }
+
+  static const int _videoFileLimit = 60 * 1024 * 1024;
+  static const int _videoTranscriptLimit = 6000;
+
+  /// Uploads the video to the app server. It returns one image with 6 moments
+  /// from the video and the soundtrack as a small audio file.
+  /// [onlyAudio]: only the soundtrack (for "תמלול וידאו").
+  Future<Map<String, dynamic>> _prepareVideo(
+    XFile file, {
+    bool onlyAudio = false,
+  }) async {
+    final request = http.MultipartRequest(
+      "POST",
+      Uri.parse("$api/api/ai/video_prepare"),
+    );
+    request.headers.addAll(_historyHeaders()..remove("Content-Type"));
+    if (onlyAudio) request.fields["only_audio"] = "1";
+    final name = file.name.isNotEmpty ? file.name : "video.mp4";
+    if (file.path.isNotEmpty && await File(file.path).exists()) {
+      request.files.add(
+        await http.MultipartFile.fromPath("file", file.path, filename: name),
+      );
+    } else {
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          "file",
+          await file.readAsBytes(),
+          filename: name,
+        ),
+      );
+    }
+    final response = await request.send().timeout(const Duration(minutes: 6));
+    final body = await response.stream.bytesToString();
+    dynamic data;
+    try {
+      data = jsonDecode(body);
+    } catch (_) {
+      data = null;
+    }
+    if (response.statusCode == 413) {
+      throw const FormatException("הסרטון גדול מדי. המגבלה היא 60 מגה.");
+    }
+    if (response.statusCode < 200 ||
+        response.statusCode >= 300 ||
+        data is! Map ||
+        data["ok"] != true) {
+      throw FormatException(
+        data is Map && "${data["error"] ?? ""}".trim().isNotEmpty
+            ? "${data["error"]}"
+            : "לא הצלחתי לעבד את הסרטון.",
+      );
+    }
+    return Map<String, dynamic>.from(data);
+  }
+
+  /// Backup transcription on the app server (used when the transcription server fails).
+  Future<String> _transcribeOnServer(
+    List<int> bytes,
+    String filename,
+    MediaType type,
+  ) async {
+    final request = http.MultipartRequest(
+      "POST",
+      Uri.parse("$api/api/ai/transcribe_media"),
+    );
+    request.headers.addAll(_historyHeaders()..remove("Content-Type"));
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        "file",
+        bytes,
+        filename: filename,
+        contentType: type,
+      ),
+    );
+    final response = await request.send().timeout(const Duration(minutes: 5));
+    dynamic data;
+    try {
+      data = jsonDecode(await response.stream.bytesToString());
+    } catch (_) {
+      data = null;
+    }
+    if (response.statusCode < 200 ||
+        response.statusCode >= 300 ||
+        data is! Map ||
+        data["ok"] != true) {
+      throw FormatException(
+        data is Map && "${data["error"] ?? ""}".trim().isNotEmpty
+            ? "${data["error"]}"
+            : "התמלול לא הצליח.",
+      );
+    }
+    return "${data["text"] ?? ""}".trim();
+  }
+
+  static String _clock(num seconds) {
+    final s = seconds.round();
+    return "${s ~/ 60}:${(s % 60).toString().padLeft(2, "0")}";
+  }
+
+  /// [transcribeOnly] true: "תמלול וידאו" - only the text of what is said.
+  /// false: "שלח וידאו" - the transcript and an explanation of what is seen, sent at once.
+  Future<void> _pickAiVideo({bool transcribeOnly = false}) async {
+    if (_busy || _picking) return;
+    final generation = ++_pickGeneration;
+    setState(() => _picking = true);
+    var sendNow = false;
+    try {
+      final file = await ImagePicker().pickVideo(source: ImageSource.gallery);
+      if (file == null) return;
+      final size = await file.length();
+      if (size > _videoFileLimit) {
+        throw const FormatException(
+          "הסרטון גדול מדי. המגבלה היא 60 מגה (ועד 20 דקות). אפשר לקצר אותו בגלריה ולנסות שוב.",
+        );
+      }
+      if (!mounted || generation != _pickGeneration) return;
+
+      final approved =
+          await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Text(
+                transcribeOnly ? "תמלול וידאו" : "שליחת וידאו",
+                textDirection: TextDirection.rtl,
+              ),
+              content: Text(
+                transcribeOnly
+                    ? "השמע מהסרטון (עד 20 דקות) יישלח ל-Google לתמלול ולתרגום לעברית. הסרטון נמחק מהשרת מיד בסיום ואינו נשמר."
+                    : "הסרטון (עד 20 דקות) יעלה לשרת: יילקחו ממנו 6 תמונות, והשמע יישלח ל-Google לתמלול ולתרגום לעברית. תקבל תמלול והסבר של מה שרואים. הסרטון נמחק מהשרת מיד בסיום ואינו נשמר.",
+                textDirection: TextDirection.rtl,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text("ביטול"),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text("מאשר"),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!approved || !mounted || generation != _pickGeneration) return;
+
+      setState(() => _busy = true);
+      late Map<String, dynamic> prep;
+      var transcript = "";
+      var transcriptNote = "";
+      var failed = 0;
+      try {
+        await _withVoiceProgress(
+          transcribeOnly ? "מתמלל וידאו" : "מעבד וידאו",
+          (progress) async {
+            final mb = (size / (1024 * 1024)).toStringAsFixed(1);
+            progress.value = transcribeOnly
+                ? "מעלה את הסרטון ($mb MB)..."
+                : "מעלה את הסרטון ($mb MB) ומכין תמונות...";
+            prep = await _prepareVideo(file, onlyAudio: transcribeOnly);
+            final audio = "${prep["audio"] ?? ""}";
+            if (prep["has_audio"] != true || audio.isEmpty) {
+              transcriptNote = "בסרטון אין פס קול.";
+              return;
+            }
+            final audioBytes = base64Decode(audio);
+            final audioName = "${prep["audio_name"] ?? "audio.ogg"}";
+            final mime = "${prep["audio_mime"] ?? "audio/ogg"}".split("/");
+            final audioType = MediaType(
+              mime.first,
+              mime.length > 1 ? mime[1] : "ogg",
+            );
+            var firstError = "";
+            // 1. שרת התמלול הרגיל (כמו הקלטות)
+            try {
+              final result = await _transcribeAudioBytes(
+                audioBytes,
+                audioName,
+                audioType,
+                seconds: (prep["seconds"] as num?)?.toDouble(),
+                onProgress: (text) => progress.value = text.replaceAll(
+                  "ההקלטה",
+                  "השמע מהסרטון",
+                ),
+              );
+              transcript = result.text.trim();
+              failed = result.failed;
+            } on _VoiceStop catch (e) {
+              firstError = e.message;
+            } on FormatException catch (e) {
+              firstError = e.message;
+            } catch (_) {
+              firstError = "שגיאה";
+            }
+            // 2. גיבוי: השרת של האפליקציה מתמלל בעצמו (כמו הודעות קוליות בוואטסאפ)
+            if (transcript.isEmpty) {
+              progress.value = "מנסה תמלול בדרך נוספת...";
+              try {
+                transcript = await _transcribeOnServer(
+                  audioBytes,
+                  audioName,
+                  audioType,
+                );
+                failed = 0;
+              } on FormatException catch (e) {
+                transcriptNote = "${firstError} ${e.message}".contains("ברור")
+                    ? "לא נשמע בסרטון דיבור ברור."
+                    : "התמלול לא הצליח (${e.message}).";
+              } catch (_) {
+                transcriptNote = "התמלול לא הצליח.";
+              }
+              if (transcript.isEmpty && transcriptNote.isEmpty) {
+                transcriptNote = "לא נשמע בסרטון דיבור ברור.";
+              }
+            }
+          },
+        );
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      if (!mounted || generation != _pickGeneration) return;
+
+      final seconds = (prep["seconds"] as num?) ?? 0;
+      final length = seconds > 0 ? " (${_clock(seconds)})" : "";
+      if (failed > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("$failed קטעים לא תומללו (מסומנים בתמלול).")),
+        );
+      }
+
+      // ---- 1. תמלול וידאו: רק הטקסט ----
+      if (transcribeOnly) {
+        if (transcript.isEmpty) {
+          throw FormatException(
+            transcriptNote.isEmpty ? "לא התקבל תמלול." : transcriptNote,
+          );
+        }
+        final userText = "🎥 תמלול וידאו$length";
+        final answerText = "📝 תמלול הסרטון:\n\n$transcript";
+        setState(() {
+          _messages.add({"role": "user", "text": userText});
+          _messages.add({"role": "assistant", "text": answerText});
+        });
+        _toBottom();
+        await _ensureConversation();
+        _saveMessage("user", userText);
+        _saveMessage("assistant", answerText);
+        _ctx.add({"role": "user", "content": userText});
+        _ctx.add({"role": "assistant", "content": answerText});
+        return;
+      }
+
+      // ---- 2. שלח וידאו: תמלול + הסבר של מה שרואים, נשלח מיד ----
+      final times = (prep["times"] is List)
+          ? (prep["times"] as List).map((t) => "$t").join(", ")
+          : "";
+      final frames = (prep["frames"] as num?)?.toInt() ?? 1;
+      final cut = transcript.length > _videoTranscriptLimit;
+      final forModel = cut
+          ? "${transcript.substring(0, _videoTranscriptLimit)} ..."
+          : transcript;
+      final note = StringBuffer()
+        ..writeln("[וידאו מצורף${seconds > 0 ? " — אורך ${_clock(seconds)}" : ""}]")
+        ..writeln(
+          frames > 1
+              ? "התמונה המצורפת היא לוח של $frames רגעים מהסרטון לפי הסדר (ממוספרים 1 עד $frames, עם הזמן בפינה)${times.isNotEmpty ? ": $times" : ""}."
+              : "התמונה המצורפת היא רגע מתוך הסרטון.",
+        );
+      if (transcript.isNotEmpty) {
+        note
+          ..writeln(
+            cut
+                ? "תמלול הדיבור בסרטון (החלק הראשון בלבד — התמלול ארוך):"
+                : "תמלול הדיבור בסרטון (מתורגם לעברית):",
+          )
+          ..writeln('"""')
+          ..writeln(forModel)
+          ..writeln('"""');
+      } else if (transcriptNote.isNotEmpty) {
+        note.writeln(transcriptNote);
+      }
+      note.write(
+        "המשתמש כבר רואה את התמלול, אז אל תחזור עליו. הסבר מה רואים בסרטון ומה קורה בו, "
+        "וקשר את זה למה שנאמר. ענה לפי התמונות והתמלול בלבד; אל תנחש מה קרה בין הרגעים שבתמונה, ואם משהו לא ברור, אמור זאת.",
+      );
+
+      setState(() {
+        _pendingImage = "${prep["image"]}";
+        _pendingVideoNote = note.toString();
+        _pendingVideoTranscript = transcript.isNotEmpty
+            ? transcript
+            : (transcriptNote.isNotEmpty ? transcriptNote : "אין תמלול.");
+        _picking = false;
+      });
+      sendNow = true;
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error is FormatException
+                  ? error.message
+                  : (error is TimeoutException
+                        ? "העלאת הסרטון לקחה יותר מדי זמן. נסה סרטון קצר יותר."
+                        : "לא ניתן לעבד את הסרטון. בדוק הרשאת גישה לסרטונים ונסה שוב."),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted && generation == _pickGeneration) {
+        setState(() => _picking = false);
+      }
+    }
+    // נשלח מיד: מה שכתוב בשורת הכתיבה (אם יש) נשלח כשאלה על הסרטון
+    if (sendNow && mounted && generation == _pickGeneration) await _ask();
+  }
+
+  // ---- דבר בעברית -> קובץ שמע בשפה אחרת ----
+  static const int _speakMaxMinutes = 3;
+
+  /// After the Hebrew recording is transcribed: asks in which language to create the audio.
+  void _startSpeak(String hebrew) {
+    final text = hebrew.trim();
+    if (text.isEmpty) throw const FormatException("לא התקבל תמלול ברור.");
+    setState(() {
+      _pendingSpeakText = text;
+      _messages.add({"role": "user", "text": "🎙️ $text"});
+      _messages.add({
+        "role": "assistant",
+        "text":
+            "באיזו שפה ליצור את קובץ השמע?\nכתוב שם של שפה, למשל: אנגלית, רוסית, ערבית, צרפתית, ספרדית, אמהרית.\n(או \"ביטול\")",
+      });
+    });
+    _toBottom();
+  }
+
+  /// The user typed a language: translate + create the audio file.
+  Future<void> _speakTo(String language) async {
+    final hebrew = _pendingSpeakText;
+    if (hebrew == null) return;
+    final typed = language.trim();
+    if (const ["ביטול", "בטל", "cancel"].contains(typed.toLowerCase())) {
+      setState(() {
+        _pendingSpeakText = null;
+        _input.clear();
+        _messages.add({"role": "user", "text": typed});
+        _messages.add({"role": "assistant", "text": "בוטל."});
+      });
+      _toBottom();
+      return;
+    }
+    final answer = <String, String>{
+      "role": "assistant",
+      "text": "🔊 מתרגם ויוצר קובץ שמע...",
+    };
+    setState(() {
+      _busy = true;
+      _input.clear();
+      _messages.add({"role": "user", "text": typed});
+      _messages.add(answer);
+    });
+    _toBottom();
+    try {
+      final headers = _historyHeaders();
+      final r = await http
+          .post(
+            Uri.parse("$api/api/ai/speak"),
+            headers: headers,
+            body: jsonEncode({"text": hebrew, "lang": typed}),
+          )
+          .timeout(const Duration(seconds: 90));
+      dynamic data;
+      try {
+        data = jsonDecode(utf8.decode(r.bodyBytes));
+      } catch (_) {
+        data = null;
+      }
+      if (r.statusCode < 200 ||
+          r.statusCode >= 300 ||
+          data is! Map ||
+          data["ok"] != true) {
+        final msg = data is Map && "${data["error"] ?? ""}".trim().isNotEmpty
+            ? "${data["error"]}"
+            : "יצירת קובץ השמע לא הצליחה.";
+        // נשאר מחכה לשפה: אפשר לכתוב שוב
+        if (mounted) {
+          setState(
+            () => answer["text"] = "$msg\nכתוב שוב שם של שפה, או \"ביטול\".",
+          );
+        }
+        return;
+      }
+      final bytes = base64Decode("${data["audio"]}");
+      final dir = await getTemporaryDirectory();
+      final path =
+          "${dir.path}/cozy_${data["lang"]}_${DateTime.now().millisecondsSinceEpoch}.mp3";
+      await File(path).writeAsBytes(bytes, flush: true);
+      final text = "🔊 ${data["language"] ?? typed}:\n${data["translated"] ?? ""}";
+      if (!mounted) return;
+      setState(() {
+        answer["text"] = text;
+        answer["audio_path"] = path;
+        _pendingSpeakText = null;
+      });
+      await _ensureConversation();
+      _saveMessage("user", "🎙️ $hebrew\n← $typed");
+      _saveMessage("assistant", text);
+      _ctx.add({"role": "user", "content": "🎙️ $hebrew"});
+      _ctx.add({"role": "assistant", "content": text});
+      unawaited(_playSpeak(path));
+    } on TimeoutException {
+      if (mounted) {
+        setState(
+          () => answer["text"] =
+              "הבקשה מתעכבת יותר מדי. כתוב שוב שם של שפה כדי לנסות שוב.",
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => answer["text"] =
+              "יצירת קובץ השמע לא הצליחה. כתוב שוב שם של שפה כדי לנסות שוב.",
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+        _toBottom();
+      }
+    }
+  }
+
+  Future<void> _playSpeak(String path) async {
+    try {
+      if (_playingPath == path) {
+        await _speakPlayer.stop();
+        if (mounted) setState(() => _playingPath = null);
+        return;
+      }
+      await _speakPlayer.stop();
+      if (mounted) setState(() => _playingPath = path);
+      await _speakPlayer.play(DeviceFileSource(path));
+    } catch (_) {
+      if (mounted) {
+        setState(() => _playingPath = null);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("לא ניתן לנגן את הקובץ.")),
+        );
+      }
+    }
+  }
+
+  Future<void> _shareSpeak(String path, String text) async {
+    try {
+      await Share.shareXFiles([
+        XFile(path, mimeType: "audio/mpeg"),
+      ], text: text.replaceFirst(RegExp(r"^🔊 [^\n]*\n"), ""));
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("לא ניתן לשתף את הקובץ.")),
+        );
+      }
+    }
+  }
+
+  /// [speak]: record Hebrew and then create an audio file in another language.
+  Future<void> _recordAiVoice({bool speak = false}) async {
     if (_busy || _picking) return;
     final approved =
         await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text("תמלול הקלטה", textDirection: TextDirection.rtl),
-            content: const Text(
-              "ההקלטה תישלח ל-Google לתמלול ולתרגום לעברית. היא אינה נשמרת. אפשר להקליט עד שתי דקות.",
+            title: Text(
+              speak ? "דבר בעברית ← קול בשפה אחרת" : "תמלול הקלטה",
+              textDirection: TextDirection.rtl,
+            ),
+            content: Text(
+              speak
+                  ? "דבר בעברית (עד $_speakMaxMinutes דקות). אחרי ההקלטה אשאל באיזו שפה ליצור את קובץ השמע. ההקלטה נשלחת ל-Google לתמלול, לתרגום ולהקראה, ואינה נשמרת."
+                  : "ההקלטה (עד 20 דקות) תישלח ל-Google לתמלול ולתרגום לעברית. היא אינה נשמרת.",
               textDirection: TextDirection.rtl,
             ),
             actions: [
@@ -3124,12 +4397,14 @@ class _CozyAiPageState extends State<CozyAiPage> {
 
     final recorder = FlutterSoundRecorder();
     var opened = false;
-    var handedOff = false;
     Timer? limit;
+    Timer? ticker;
+    final elapsed = ValueNotifier<int>(0);
     try {
       final permission = await Permission.microphone.request();
-      if (!permission.isGranted)
+      if (!permission.isGranted) {
         throw const FormatException("צריך לאשר גישה למיקרופון.");
+      }
       await recorder.openRecorder();
       opened = true;
       final isIos = !kIsWeb && Platform.isIOS;
@@ -3139,126 +4414,380 @@ class _CozyAiPageState extends State<CozyAiPage> {
       final subtype = isIos ? "mp4" : "aac";
       final path =
           "${dir.path}/cozy_voice_${DateTime.now().millisecondsSinceEpoch}.$ext";
+      final startedAt = DateTime.now();
       await recorder.startRecorder(toFile: path, codec: codec);
       if (!mounted) return;
-      limit = Timer(const Duration(minutes: 2), () {
-        if (mounted && Navigator.of(context).canPop())
-          Navigator.of(context).pop();
+
+      ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+        elapsed.value++;
       });
+      final maxMinutes = speak ? _speakMaxMinutes : _voiceMaxMinutes;
+      limit = Timer(Duration(minutes: maxMinutes), () {
+        if (mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+      });
+      String clock(int seconds) =>
+          "${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, "0")}";
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (ctx) => AlertDialog(
           title: const Text("🎙️ מקליט...", textDirection: TextDirection.rtl),
-          content: const Text(
-            "לחץ עצור כשתסיים. ההקלטה מוגבלת לשתי דקות.",
-            textDirection: TextDirection.rtl,
+          content: ValueListenableBuilder<int>(
+            valueListenable: elapsed,
+            builder: (_, seconds, __) => Text(
+              "לחץ עצור כשתסיים.\nזמן: ${clock(seconds)} מתוך $maxMinutes:00",
+              textDirection: TextDirection.rtl,
+            ),
           ),
           actions: [
             FilledButton.icon(
               onPressed: () => Navigator.pop(ctx),
               icon: const Icon(Icons.stop),
-              label: const Text("עצור ותמלל"),
+              label: Text(speak ? "עצור" : "עצור ותמלל"),
               style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
             ),
           ],
         ),
       );
       limit.cancel();
+      ticker.cancel();
       await recorder.stopRecorder();
+      final seconds =
+          DateTime.now().difference(startedAt).inMilliseconds / 1000.0;
       final bytes = await File(path).readAsBytes();
-      if (bytes.isEmpty || bytes.length > 2 * 1024 * 1024) {
-        throw const FormatException("ההקלטה גדולה מדי. נסה הקלטה קצרה יותר.");
-      }
+      try {
+        await File(path).delete();
+      } catch (_) {}
+      if (bytes.length < 1000) throw const FormatException("לא נקלט קול.");
       if (!mounted) return;
       setState(() => _busy = true);
-      final request = http.MultipartRequest("POST", Uri.parse(cozyAiVoiceApi));
-      request.headers["X-Xpressphone-Client"] = "cozy-mobile-v1";
-      request.fields["consent"] = "yes";
-      request.files.add(
-        http.MultipartFile.fromBytes(
-          "file",
-          bytes,
-          filename: "voice.$ext",
-          contentType: MediaType("audio", subtype),
-        ),
-      );
-      final response = await request.send().timeout(
-        const Duration(seconds: 75),
-      );
-      final payload = jsonDecode(await response.stream.bytesToString());
-      if (response.statusCode < 200 ||
-          response.statusCode >= 300 ||
-          payload is! Map) {
-        throw FormatException(
-          payload is Map && "${payload["error"]}".trim().isNotEmpty
-              ? "${payload["error"]}"
-              : "התמלול לא הצליח.",
+      _VoiceResult transcript;
+      try {
+        transcript = await _withVoiceProgress(
+          "מתמלל את ההקלטה",
+          (progress) => _transcribeAudioBytes(
+            bytes,
+            "voice.$ext",
+            MediaType("audio", subtype),
+            seconds: seconds,
+            onProgress: (text) => progress.value = text,
+          ),
         );
+      } finally {
+        if (mounted) setState(() => _busy = false);
       }
-      final transcript = "${payload["text"] ?? ""}".trim();
-      if (transcript.isEmpty)
-        throw const FormatException("לא התקבל תמלול ברור.");
-      if (!mounted) return;
-      setState(() => _busy = false);
-      _input.text = transcript;
-      handedOff = true;
-      await _ask();
+      if (speak) {
+        if (!mounted) return;
+        _startSpeak(transcript.text);
+      } else {
+        await _deliverVoiceTranscript(transcript);
+      }
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               error is FormatException
                   ? error.message
-                  : "לא ניתן לתמלל כרגע. נסה שוב.",
+                  : (error is _VoiceStop
+                        ? error.message
+                        : "לא ניתן לתמלל כרגע. נסה שוב."),
             ),
           ),
         );
+      }
     } finally {
       limit?.cancel();
+      ticker?.cancel();
+      elapsed.dispose();
       if (opened) {
         try {
           await recorder.closeRecorder();
         } catch (_) {}
       }
-      if (mounted && !handedOff) setState(() => _busy = false);
+      if (mounted && _busy) setState(() => _busy = false);
     }
+  }
+
+
+  // ---- תפריט 📎: כל האפשרויות בכרטיסים צבעוניים, שתיים בשורה ----
+  Widget _attachSheet(BuildContext ctx) {
+    Widget tile(
+      String action,
+      IconData icon,
+      String title,
+      String subtitle,
+      Color a,
+      Color b,
+    ) {
+      return Expanded(
+        child: Padding(
+          padding: const EdgeInsets.all(5),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => Navigator.pop(ctx, action),
+              child: Ink(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 11,
+                ),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(18),
+                  gradient: LinearGradient(
+                    begin: Alignment.topRight,
+                    end: Alignment.bottomLeft,
+                    colors: [
+                      a.withValues(alpha: 0.24),
+                      b.withValues(alpha: 0.10),
+                    ],
+                  ),
+                  border: Border.all(color: a.withValues(alpha: 0.55)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [a, b],
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: a.withValues(alpha: 0.45),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: Icon(icon, color: Colors.white, size: 22),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            subtitle,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.68),
+                              fontSize: 11.5,
+                              height: 1.25,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget row(List<Widget> tiles) => IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: tiles),
+    );
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 44,
+              height: 5,
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              "מה תרצה לצרף? ✨",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 19,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 10),
+            row([
+              tile("image", Icons.photo, "תמונה", "מהגלריה",
+                  const Color(0xff3b82f6), const Color(0xff06b6d4)),
+              tile("camera", Icons.camera_alt, "צילום", "צלם עכשיו",
+                  const Color(0xff14b8a6), const Color(0xff22c55e)),
+            ]),
+            row([
+              tile("video", Icons.videocam, "שלח וידאו", "תמלול + מה רואים",
+                  const Color(0xff8b5cf6), const Color(0xffec4899)),
+              tile("video_transcribe", Icons.subtitles, "תמלול וידאו",
+                  "רק מה שנאמר", const Color(0xfff43f5e), const Color(0xfff97316)),
+            ]),
+            row([
+              tile("speak", Icons.record_voice_over, "קול בשפה אחרת",
+                  "דבר בעברית ← קובץ שמע",
+                  const Color(0xfff59e0b), const Color(0xffeab308)),
+              tile("record", Icons.mic, "הקלט קול", "לתמלול לעברית",
+                  const Color(0xffef4444), const Color(0xffdb2777)),
+            ]),
+            row([
+              tile("audio", Icons.audio_file, "קובץ קול", "תמלול קובץ",
+                  const Color(0xff6366f1), const Color(0xff3b82f6)),
+              tile("pdf", Icons.picture_as_pdf, "עריכת PDF", "החלפת טקסט",
+                  const Color(0xff10b981), const Color(0xff84cc16)),
+            ]),
+            const SizedBox(height: 8),
+            Text(
+              "וידאו והקלטות עד 20 דקות · וידאו עד 60 מגה",
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.5),
+                fontSize: 11.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _ask() async {
     final question = _input.text.trim();
     final picture = _pendingImage;
+    // "שלח לי במייל / בוואטסאפ ..." - פותח חלון שליחה עם התשובה האחרונה
+    if (picture == null &&
+        _pendingSpeakText == null &&
+        question.isNotEmpty &&
+        !_busy &&
+        !_picking) {
+      final command = _parseSendCommand(question);
+      if (command != null) {
+        _input.clear();
+        await _openSendDialog(
+          command.channel,
+          command.text.isNotEmpty ? command.text : _lastAnswerText(),
+          to: command.to,
+        );
+        return;
+      }
+    }
+    // מחכים לשפה של קובץ השמע: מה שנכתב הוא שם השפה
+    if (_pendingSpeakText != null && picture == null && question.isNotEmpty) {
+      if (_busy || _picking) return;
+      await _speakTo(question);
+      return;
+    }
+    final videoNote = picture == null ? null : _pendingVideoNote;
+    // "שלח וידאו": התשובה בשתי שורות - 1. התמלול 2. מה רואים בסרטון
+    final videoHeader = videoNote == null
+        ? ""
+        : "📝 תמלול:\n${_pendingVideoTranscript ?? "אין תמלול."}\n\n🎥 מה רואים בסרטון:\n";
+    try {
+      // נשלח עם המשתמש: כשה-AI כבוי לכולם, אדמין עדיין יכול להשתמש בו
+      final response = await http
+          .get(
+            Uri.parse("$api/api/cozy-ai/status"),
+            headers: _historyHeaders(),
+          )
+          .timeout(const Duration(seconds: 10));
+      final data = jsonDecode(response.body);
+      if (data["enabled"] != true) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Cozy AI אינו זמין כרגע.")),
+          );
+        }
+        return;
+      }
+    } catch (_) {}
     if ((question.isEmpty && picture == null) || _busy || _picking) return;
     if (question.length > 12000) return;
     final generation = ++_generation;
     final answer = <String, String>{
       "role": "assistant",
-      "text": picture == null ? "מתחיל..." : "מנתח תמונה...",
+      "text": picture == null
+          ? "מתחיל..."
+          : (videoNote != null
+                ? "${videoHeader}מנתח את הסרטון..."
+                : "מנתח תמונה..."),
     };
+    final shownText = videoNote != null
+        ? "🎥 ${question.isEmpty ? "תמלל והסבר מה רואים בסרטון" : question}"
+        : (question.isEmpty ? "מה רואים בתמונה?" : question);
+    final modelText = videoNote != null
+        ? "$videoNote\n\nהבקשה של המשתמש: "
+              "${question.isEmpty ? "הסבר מה רואים בסרטון ומה קורה בו." : question}"
+        : (question.isEmpty
+              ? "תאר מה רואים בתמונה וקרא טקסט ברור בלי לנחש."
+              : question);
     setState(() {
       _busy = true;
       _messages.add({
         "role": "user",
-        "text": question.isEmpty ? "מה רואים בתמונה?" : question,
+        "text": shownText,
         if (picture != null) "image": picture,
       });
       _messages.add(answer);
       _pendingImage = null;
+      _pendingVideoNote = null;
+        _pendingVideoTranscript = null;
       _input.clear();
     });
     _toBottom();
     final client = http.Client();
     _client = client;
     try {
+      await _ensureConversation();
+      if (!mounted || generation != _generation) return;
+      final contextForModel = _ctx
+          .skip(_ctx.length > 12 ? _ctx.length - 12 : 0)
+          .map(
+            (m) => {
+              "role": m["role"] ?? "user",
+              "content": (m["content"] ?? "").length > 4000
+                  ? (m["content"] ?? "").substring(0, 4000)
+                  : (m["content"] ?? ""),
+            },
+          )
+          .toList();
+      _saveMessage("user", shownText, hasImage: picture != null);
+      // לווידאו: התמלול נשמר בהקשר, כדי שאפשר יהיה לשאול עליו שאלות המשך
+      _ctx.add({
+        "role": "user",
+        "content": videoNote != null ? modelText : shownText,
+      });
       final req = http.Request("POST", Uri.parse(cozyAiApi));
       req.headers["Content-Type"] = "application/json";
       req.body = jsonEncode({
-        "message": question.isEmpty
-            ? "תאר מה רואים בתמונה וקרא טקסט ברור בלי לנחש."
-            : question,
+        "message": modelText,
         "model": _mode,
         if (picture != null) "images": [picture],
+        if (_conversationId != null) "conversation_id": _conversationId,
+        if (contextForModel.isNotEmpty) "history": contextForModel,
       });
       // A local model can take a little while to start producing its first token.
       // Do not treat that normal startup time as a network failure.
@@ -3276,22 +4805,33 @@ class _CozyAiPageState extends State<CozyAiPage> {
               .timeout(const Duration(seconds: 180))) {
         if (!mounted || generation != _generation) return;
         full += chunk;
-        setState(() => answer["text"] = full.isEmpty ? "מתחיל..." : full);
+        setState(
+          () => answer["text"] = videoHeader +
+              (full.isEmpty
+                  ? (videoNote != null ? "מנתח את הסרטון..." : "מתחיל...")
+                  : full),
+        );
         _toBottom();
       }
       if (mounted && generation == _generation && full.trim().isEmpty) {
-        setState(() => answer["text"] = "לא התקבלה תשובה.");
+        setState(() => answer["text"] = "${videoHeader}לא התקבלה תשובה.");
+      }
+      if (generation == _generation && full.trim().isNotEmpty) {
+        _saveMessage("assistant", videoHeader + full.trim());
+        _ctx.add({"role": "assistant", "content": full.trim()});
       }
     } on TimeoutException {
       if (mounted && generation == _generation) {
         setState(
-          () => answer["text"] = "הבקשה מתעכבת יותר מדי. נסה שוב בעוד רגע.",
+          () => answer["text"] =
+              "${videoHeader}הבקשה מתעכבת יותר מדי. נסה שוב בעוד רגע.",
         );
       }
     } catch (error) {
       if (mounted && generation == _generation) {
         setState(
-          () => answer["text"] = "לא ניתן להשלים את התשובה כרגע. נסה שוב.",
+          () => answer["text"] =
+              "${videoHeader}לא ניתן להשלים את התשובה כרגע. נסה שוב.",
         );
       }
     } finally {
@@ -3317,6 +4857,196 @@ class _CozyAiPageState extends State<CozyAiPage> {
         }
         _busy = false;
       });
+  }
+
+  // ---- שליחה במייל / בוואטסאפ ----
+  bool _canSend(Map<String, String> msg) {
+    if (msg["role"] != "assistant") return false;
+    final text = (msg["text"] ?? "").trim();
+    if (text.length < 2) return false;
+    if (text.startsWith("שלום 👋") ||
+        text.startsWith("שיחה חדשה") ||
+        text == "בוטל." ||
+        text.startsWith("באיזו שפה ליצור")) {
+      return false;
+    }
+    // לא בזמן שהתשובה עוד נכתבת
+    if (_busy && _messages.isNotEmpty && identical(_messages.last, msg)) {
+      return false;
+    }
+    return true;
+  }
+
+  String _lastAnswerText() {
+    for (final m in _messages.reversed) {
+      if (_canSend(m)) return m["text"] ?? "";
+    }
+    return "";
+  }
+
+  static final RegExp _emailRe = RegExp(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}");
+  static final RegExp _phoneRe = RegExp(r"\+?\d[\d-]{7,}\d");
+
+  /// "שלח לו למייל dani@gmail.com אני מאחר" -> (email, dani@gmail.com, "אני מאחר").
+  /// No message in the command -> text is "" (the last answer is used).
+  ({String channel, String to, String text})? _parseSendCommand(String text) {
+    final t = text.trim();
+    final start = RegExp(r"^(תשלחי|תשלח|שלחי|שלח|send)\s*", caseSensitive: false);
+    if (!start.hasMatch(t)) return null;
+    const emailWords = r"(אימייל|מייל|מיל|דואר|email|mail)";
+    const waWords = r"(וואטסאפ|ווטסאפ|וואצאפ|ווצאפ|ואטסאפ|ווצפ|whatsapp)";
+    String? channel;
+    if (RegExp(emailWords, caseSensitive: false).hasMatch(t)) channel = "email";
+    if (RegExp(waWords, caseSensitive: false).hasMatch(t)) channel = "whatsapp";
+    if (channel == null) return null;
+    final email = _emailRe.firstMatch(t)?.group(0);
+    final phone = _phoneRe.firstMatch(t)?.group(0);
+    final to = channel == "email"
+        ? (email ?? "")
+        : (phone?.replaceAll(RegExp(r"[\s-]"), "") ?? "");
+
+    // מה שנשאר אחרי הפקודה, הערוץ והנמען = ההודעה
+    var rest = t.replaceFirst(start, "");
+    if (email != null) rest = rest.replaceFirst(email, " ");
+    if (phone != null) rest = rest.replaceFirst(phone, " ");
+    rest = rest.replaceFirst(
+      RegExp("(דרך |ב|ל|מ)?($emailWords|$waWords)", caseSensitive: false),
+      " ",
+    );
+    const filler = {
+      "לו", "לה", "לי", "להם", "להן", "את", "זה", "הודעה", "ההודעה",
+      "ל", "ב", "מ", "עם", "דרך", "אל", "לכתובת", "למספר", "מספר",
+      ":", "-", ",", "–", "ל-", "ב-", "מ-", "ל־", "ב־", "מ־", "ל:",
+    };
+    final words = rest.trim().split(RegExp(r"\s+"));
+    while (words.isNotEmpty && filler.contains(words.first)) {
+      words.removeAt(0);
+    }
+    final message = words.join(" ").trim();
+    // "שלח לי במייל את התמלול" - מתכוון לתשובה האחרונה, לא למילה "התמלול"
+    const refs = {
+      "התמלול", "התשובה", "התרגום", "הטקסט", "הסיכום", "זה", "הזה",
+      "את זה", "הכל", "הכול", "את הכל", "את הכול", "אותו", "אותה",
+    };
+    final isRef = refs.contains(message) ||
+        refs.contains(message.replaceFirst(RegExp(r"^את\s+"), ""));
+    return (
+      channel: channel,
+      to: to,
+      text: message.length >= 2 && !isRef ? message : "",
+    );
+  }
+
+  Future<void> _openSendDialog(
+    String channel,
+    String text, {
+    String to = "",
+  }) async {
+    final isEmail = channel == "email";
+    final toCtrl = TextEditingController(text: to);
+    final textCtrl = TextEditingController(text: text.trim());
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          isEmail ? "📧 שליחה במייל" : "💬 שליחה בוואטסאפ",
+          textDirection: TextDirection.rtl,
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: toCtrl,
+                keyboardType:
+                    isEmail ? TextInputType.emailAddress : TextInputType.phone,
+                textDirection: TextDirection.ltr,
+                decoration: InputDecoration(
+                  labelText: isEmail ? "כתובת מייל" : "מספר וואטסאפ",
+                  hintText: isEmail
+                      ? "ריק = למייל שלי"
+                      : "ריק = לוואטסאפ שלי · למשל 0521234567",
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: textCtrl,
+                minLines: 3,
+                maxLines: 8,
+                textDirection: TextDirection.rtl,
+                decoration: const InputDecoration(
+                  labelText: "מה לשלוח (אפשר לערוך)",
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("ביטול"),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.send),
+            label: const Text("שלח"),
+          ),
+        ],
+      ),
+    );
+    final target = toCtrl.text.trim();
+    final body = textCtrl.text.trim();
+    toCtrl.dispose();
+    textCtrl.dispose();
+    if (go != true || !mounted) return;
+    if (body.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("אין מה לשלוח.")),
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("שולח..."), duration: Duration(seconds: 2)),
+    );
+    String result;
+    try {
+      final r = await http
+          .post(
+            Uri.parse("$api/api/ai/send"),
+            headers: _historyHeaders(),
+            body: jsonEncode({
+              "channel": channel,
+              "to": target.isEmpty ? "me" : target,
+              "text": body,
+            }),
+          )
+          .timeout(const Duration(seconds: 60));
+      dynamic data;
+      try {
+        data = jsonDecode(utf8.decode(r.bodyBytes));
+      } catch (_) {
+        data = null;
+      }
+      if (r.statusCode >= 200 &&
+          r.statusCode < 300 &&
+          data is Map &&
+          data["ok"] == true) {
+        result = target.isEmpty
+            ? (isEmail ? "✅ נשלח למייל שלך" : "✅ נשלח לוואטסאפ שלך")
+            : "✅ נשלח ל-${data["to"] ?? target}";
+      } else {
+        result =
+            "❌ ${data is Map ? (data["error"] ?? "השליחה נכשלה") : "השליחה נכשלה"}";
+      }
+    } catch (_) {
+      result = "❌ השליחה נכשלה. בדוק חיבור לאינטרנט.";
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(result, textDirection: TextDirection.rtl)),
+    );
   }
 
   Widget _bubble(Map<String, String> msg) {
@@ -3355,6 +5085,65 @@ class _CozyAiPageState extends State<CozyAiPage> {
                 height: 1.45,
               ),
             ),
+            if (_canSend(msg))
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Wrap(
+                  spacing: 4,
+                  children: [
+                    TextButton.icon(
+                      onPressed: () =>
+                          _openSendDialog("email", msg["text"] ?? ""),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xff7dd3fc),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      icon: const Icon(Icons.email_outlined, size: 18),
+                      label: const Text("מייל"),
+                    ),
+                    TextButton.icon(
+                      onPressed: () =>
+                          _openSendDialog("whatsapp", msg["text"] ?? ""),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xff4ade80),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      icon: const Icon(Icons.chat_outlined, size: 18),
+                      label: const Text("וואטסאפ"),
+                    ),
+                  ],
+                ),
+              ),
+            if (msg["audio_path"] != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FilledButton.tonalIcon(
+                      onPressed: () => _playSpeak(msg["audio_path"]!),
+                      icon: Icon(
+                        _playingPath == msg["audio_path"]
+                            ? Icons.stop
+                            : Icons.play_arrow,
+                      ),
+                      label: Text(
+                        _playingPath == msg["audio_path"] ? "עצור" : "השמע",
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: () =>
+                          _shareSpeak(msg["audio_path"]!, msg["text"] ?? ""),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                      ),
+                      icon: const Icon(Icons.share),
+                      label: const Text("שתף / שמור"),
+                    ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
@@ -3376,64 +5165,57 @@ class _CozyAiPageState extends State<CozyAiPage> {
           style: TextStyle(fontWeight: FontWeight.w900),
         ),
         actions: [
-          IconButton(
-            tooltip: "עריכת PDF",
-            icon: const Icon(Icons.picture_as_pdf),
-            onPressed: _busy
-                ? null
-                : () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const CozyPdfPage(apiUrl: cozyAiApi),
-                    ),
-                  ),
-          ),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: _mode,
-                dropdownColor: const Color(0xff10263d),
-                style: const TextStyle(color: Colors.white, fontSize: 12),
-                iconEnabledColor: Colors.white70,
-                items: const [
-                  DropdownMenuItem(
-                    value: "auto",
-                    child: Text("אוטומטי · אינטרנט כשצריך"),
-                  ),
-                  DropdownMenuItem(
-                    value: "dicta",
-                    child: Text("DictaLM · מקומי"),
-                  ),
-                  DropdownMenuItem(
-                    value: "qwen",
-                    child: Text("Qwen · תמונות וטקסט"),
-                  ),
-                ],
-                onChanged: _busy
-                    ? null
-                    : (v) {
-                        if (v != null) setState(() => _mode = v);
-                      },
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 150),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  isExpanded: true,
+                  value: _mode,
+                  dropdownColor: const Color(0xff10263d),
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  iconEnabledColor: Colors.white70,
+                  items: const [
+                    DropdownMenuItem(
+                      value: "auto",
+                      child: Text("✨ אוטומטי · DeepSeek"),
+                    ),
+                    DropdownMenuItem(
+                      value: "deepseek",
+                      child: Text("⚡ DeepSeek V4.1 Flash · ענן"),
+                    ),
+                    DropdownMenuItem(
+                      value: "kimi",
+                      child: Text("🧠 Kimi K3 · ענן · הכי חכם"),
+                    ),
+                    DropdownMenuItem(
+                      value: "dicta",
+                      child: Text("🖥 DictaLM 12B · מקומי"),
+                    ),
+                    DropdownMenuItem(
+                      value: "qwen",
+                      child: Text("👁 Qwen 3.5 4B · תמונות וטקסט"),
+                    ),
+                  ],
+                  onChanged: _busy
+                      ? null
+                      : (v) {
+                          if (v != null) setState(() => _mode = v);
+                        },
+                ),
               ),
             ),
           ),
           IconButton(
-            tooltip: "נקה",
-            onPressed: () {
-              _stop();
-              _pickGeneration++;
-              setState(() {
-                _pendingImage = null;
-                _picking = false;
-                _messages
-                  ..clear()
-                  ..add({
-                    "role": "assistant",
-                    "text": "השיחה נוקתה. איך אפשר לעזור?",
-                  });
-              });
-            },
-            icon: const Icon(Icons.delete_outline),
+            tooltip: "השיחות שלי",
+            onPressed: _showHistory,
+            icon: const Icon(Icons.history),
+          ),
+          IconButton(
+            tooltip: "שיחה חדשה",
+            onPressed: _newConversation,
+            icon: const Icon(Icons.add_comment_outlined),
           ),
         ],
       ),
@@ -3449,6 +5231,28 @@ class _CozyAiPageState extends State<CozyAiPage> {
                 itemBuilder: (_, i) => _bubble(_messages[i]),
               ),
             ),
+            if (_pendingSpeakText != null && _pendingImage == null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.record_voice_over),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        "🗣️ כתוב באיזו שפה ליצור את קובץ השמע ולחץ שלח",
+                        textDirection: TextDirection.rtl,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: "ביטול",
+                      onPressed: () =>
+                          setState(() => _pendingSpeakText = null),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+              ),
             if (_pendingImage != null)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -3460,15 +5264,23 @@ class _CozyAiPageState extends State<CozyAiPage> {
                       width: 70,
                       fit: BoxFit.contain,
                     ),
-                    const Expanded(
+                    Expanded(
                       child: Text(
-                        "תמונה אחת עד 5 MB · ניתוח במודל ראייה",
+                        _pendingVideoNote != null
+                            ? "🎥 וידאו מצורף: רגעים מהסרטון + תמלול · כתוב שאלה או לחץ שלח"
+                            : "תמונה אחת עד 5 MB · ניתוח במודל ראייה",
                         textDirection: TextDirection.rtl,
                       ),
                     ),
                     IconButton(
-                      tooltip: "הסר תמונה",
-                      onPressed: () => setState(() => _pendingImage = null),
+                      tooltip: _pendingVideoNote != null
+                          ? "הסר וידאו"
+                          : "הסר תמונה",
+                      onPressed: () => setState(() {
+                        _pendingImage = null;
+                        _pendingVideoNote = null;
+        _pendingVideoTranscript = null;
+                      }),
                       icon: const Icon(Icons.close),
                     ),
                   ],
@@ -3489,18 +5301,65 @@ class _CozyAiPageState extends State<CozyAiPage> {
               child: Row(
                 children: [
                   IconButton(
-                    tooltip: "צרף תמונה",
-                    onPressed: _busy || _picking ? null : _pickAiImage,
-                    icon: Icon(
-                      _picking
-                          ? Icons.hourglass_empty
-                          : Icons.add_photo_alternate_outlined,
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: "הקלט לתמלול",
-                    onPressed: _busy || _picking ? null : _recordAiVoice,
-                    icon: const Icon(Icons.mic_none),
+                    tooltip: "צרף",
+                    onPressed: _busy || _picking
+                        ? null
+                        : () async {
+                            final action = await showModalBottomSheet<String>(
+                              context: context,
+                              isScrollControlled: true,
+                              backgroundColor: const Color(0xff0b1623),
+                              shape: const RoundedRectangleBorder(
+                                borderRadius: BorderRadius.vertical(
+                                  top: Radius.circular(26),
+                                ),
+                              ),
+                              builder: (ctx) => _attachSheet(ctx),
+                            );
+
+                            if (!mounted || action == null) return;
+
+                            if (action == "image") {
+                              await _pickAiImage();
+                            } else if (action == "video") {
+                              await _pickAiVideo();
+                            } else if (action == "video_transcribe") {
+                              await _pickAiVideo(transcribeOnly: true);
+                            } else if (action == "record") {
+                              await _recordAiVoice();
+                            } else if (action == "speak") {
+                              await _recordAiVoice(speak: true);
+                            } else if (action == "audio") {
+                              await _pickAiAudioFile();
+                            } else if (action == "camera") {
+                              final picked = await ImagePicker().pickImage(
+                                source: ImageSource.camera,
+                                maxWidth: 1600,
+                                maxHeight: 1600,
+                                imageQuality: 90,
+                              );
+                              if (picked != null && mounted) {
+                                final bytes = await picked.readAsBytes();
+                                if (bytes.length <= 5 * 1024 * 1024) {
+                                  setState(
+                                    () {
+                                      _pendingImage = base64Encode(bytes);
+                                      _pendingVideoNote = null;
+        _pendingVideoTranscript = null;
+                                    },
+                                  );
+                                }
+                              }
+                            } else if (action == "pdf") {
+                              await Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      const CozyPdfPage(apiUrl: cozyAiApi),
+                                ),
+                              );
+                            }
+                          },
+                    icon: const Icon(Icons.attach_file),
                   ),
                   Expanded(
                     child: TextField(
@@ -3550,6 +5409,164 @@ class _CozyAiPageState extends State<CozyAiPage> {
     );
   }
 }
+
+class _CozyAiHistorySheet extends StatefulWidget {
+  const _CozyAiHistorySheet({
+    required this.userLabel,
+    required this.activeId,
+    required this.load,
+    required this.remove,
+  });
+
+  final String userLabel;
+  final int? activeId;
+  final Future<List<Map<String, dynamic>>> Function() load;
+  final Future<void> Function(int id) remove;
+
+  @override
+  State<_CozyAiHistorySheet> createState() => _CozyAiHistorySheetState();
+}
+
+class _CozyAiHistorySheetState extends State<_CozyAiHistorySheet> {
+  List<Map<String, dynamic>>? _items;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  Future<void> _reload() async {
+    setState(() {
+      _items = null;
+      _error = null;
+    });
+    try {
+      final items = await widget.load();
+      if (!mounted) return;
+      setState(() => _items = items);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = "לא ניתן לטעון שיחות כרגע.\n$e");
+    }
+  }
+
+  Future<void> _delete(int id) async {
+    final ok =
+        await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text("מחיקת שיחה", textDirection: TextDirection.rtl),
+            content: const Text(
+              "למחוק את השיחה?",
+              textDirection: TextDirection.rtl,
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text("ביטול"),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text("מחק"),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!ok) return;
+    try {
+      await widget.remove(id);
+    } catch (_) {}
+    if (mounted) _reload();
+  }
+
+  Widget _body() {
+    final items = _items;
+    if (_error != null) {
+      return Padding(
+        padding: const EdgeInsets.all(24),
+        child: Center(child: Text(_error!)),
+      );
+    }
+    if (items == null) {
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (items.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: Center(child: Text("עדיין אין שיחות קודמות.")),
+      );
+    }
+    return ListView.builder(
+      shrinkWrap: true,
+      itemCount: items.length,
+      itemBuilder: (_, i) {
+        final item = items[i];
+        final id = (item["id"] as num).toInt();
+        final title = "${item["title"] ?? ""}".trim();
+        return ListTile(
+          selected: id == widget.activeId,
+          title: Text(
+            title.isEmpty ? "שיחה ללא כותרת" : title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text("${item["when"] ?? ""}"),
+          trailing: IconButton(
+            tooltip: "מחק שיחה",
+            icon: const Icon(Icons.delete_outline),
+            onPressed: () => _delete(id),
+          ),
+          onTap: () => Navigator.pop(context, id),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.75,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  "השיחות של ${widget.userLabel}",
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: FilledButton.icon(
+                  onPressed: () => Navigator.pop(context, -1),
+                  icon: const Icon(Icons.add),
+                  label: const Text("שיחה חדשה"),
+                ),
+              ),
+              Flexible(child: _body()),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 // ===== /Cozy AI =====
 
 class DashboardPage extends StatefulWidget {
@@ -3588,9 +5605,15 @@ class _DashboardPageState extends State<DashboardPage> {
     loadAll();
     _checkBiometricEnabled();
     timer = Timer.periodic(
-      const Duration(seconds: 3),
+      const Duration(seconds: 10),
       (_) => loadAll(silent: true),
     );
+    // הודעה חדשה (realtime) מרעננת את רשימת הצ'אטים מיד
+    realtimeTick.addListener(_onChatsRealtimeTick);
+  }
+
+  void _onChatsRealtimeTick() {
+    if (mounted) loadAll(silent: true);
   }
 
   Future<void> _checkBiometricEnabled() async {
@@ -3605,6 +5628,7 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     timer?.cancel();
+    realtimeTick.removeListener(_onChatsRealtimeTick);
     super.dispose();
   }
 
@@ -3919,7 +5943,7 @@ class _DashboardPageState extends State<DashboardPage> {
         Uri.parse("$api/api/set_profile_pic"),
       );
       req.headers["X-App-User"] = widget.currentUser;
-      req.headers["X-App-Pin"] = accessUserPins[widget.currentUser] ?? "";
+      req.headers["X-App-Pin"] = userPin(widget.currentUser);
       req.fields["wa_id"] = waId;
       req.files.add(
         http.MultipartFile.fromBytes(
@@ -4120,52 +6144,11 @@ class _DashboardPageState extends State<DashboardPage> {
           "cozycrafts chat",
           style: TextStyle(fontWeight: FontWeight.w900),
         ),
-        actions: [
-          if (widget.currentUser == "admin")
-            IconButton(
-              tooltip: "ניהול",
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const AdminPage(currentUser: "admin"),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.admin_panel_settings),
-            ),
-          IconButton(
-            tooltip: "Cozy AI",
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const CozyAiPage()),
-              );
-            },
-            icon: const Icon(Icons.auto_awesome),
-          ),
-          IconButton(
-            tooltip: "מיקומים שמורים",
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) =>
-                      SavedLocationsPage(currentUser: widget.currentUser),
-                ),
-              );
-            },
-            icon: const Icon(Icons.map_outlined),
-          ),
-          IconButton(
-            tooltip: lightMode ? "מצב כהה" : "מצב בהיר",
-            onPressed: () {
-              appLightMode.value = !appLightMode.value;
-              setState(() {});
-            },
-            icon: Icon(lightMode ? Icons.dark_mode : Icons.light_mode),
-          ),
-          IconButton(
+        centerTitle: true,
+        leadingWidth: 64,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 8),
+          child: IconButton(
             onPressed: () => loadAll(),
             icon: AnimatedRotation(
               turns: (loadingCountries || loadingChats) ? 1.0 : 0.0,
@@ -4198,77 +6181,162 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
             ),
           ),
-          IconButton(
-            tooltip: biometricEnabled
-                ? "בטל כניסה עם $biometricName"
-                : "הפעל כניסה עם $biometricName",
-            onPressed: () async {
-              try {
-                final canAuth = await canUseFaceUnlock();
-                if (!canAuth) {
-                  if (context.mounted)
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          "$biometricName לא זמין או לא מוגדר במכשיר",
-                        ),
-                      ),
-                    );
-                  return;
-                }
-                if (biometricEnabled) {
-                  // כיבוי
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.remove("bio_${widget.currentUser}");
-                  if (mounted) setState(() => biometricEnabled = false);
-                  if (context.mounted)
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text("🔓 כניסה עם $biometricName בוטלה"),
-                      ),
-                    );
-                } else {
-                  // הפעלה
-                  final auth = await askFaceUnlock();
-                  if (!auth) return;
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.setBool("bio_${widget.currentUser}", true);
-                  if (mounted) setState(() => biometricEnabled = true);
-                  if (context.mounted)
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          "✅ כניסה עם $biometricName הופעלה עבור ${widget.currentUser}",
-                        ),
-                      ),
-                    );
-                }
-              } catch (e) {
-                if (context.mounted)
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(SnackBar(content: Text("שגיאה: $e")));
-              }
-            },
-            icon: Icon(
-              biometricLoginIcon,
-              color: appLightMode.value
-                  ? const Color(0xff2a2f32)
-                  : biometricEnabled
-                  ? const Color(0xff00d4ff)
-                  : Colors.white38,
+        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: IconButton(
+              onPressed: () {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const PinPage()),
+                );
+              },
+              icon: const Icon(Icons.lock),
             ),
           ),
-          IconButton(
-            onPressed: () {
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const PinPage()),
-              );
-            },
-            icon: const Icon(Icons.lock),
-          ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(102),
+          child: _TopButtonsBar(
+            buttons: [
+              if (isManagerUser(widget.currentUser))
+                _TopChip(
+                  label: "ניהול",
+                  color: const Color(0xffc39bff),
+                  child: IconButton(
+                    tooltip: "ניהול",
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              AdminPage(currentUser: widget.currentUser),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.admin_panel_settings),
+                  ),
+                ),
+              _TopChip(
+                label: "AI",
+                color: const Color(0xffffd54f),
+                child: IconButton(
+                  tooltip: "Cozy AI",
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            CozyAiPage(currentUser: widget.currentUser),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.auto_awesome),
+                ),
+              ),
+              _TopChip(
+                label: "מיקומים",
+                color: const Color(0xff69f0ae),
+                child: IconButton(
+                  tooltip: "מיקומים שמורים",
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            SavedLocationsPage(currentUser: widget.currentUser),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.map_outlined),
+                ),
+              ),
+              _TopChip(
+                label: lightMode ? "לילה" : "יום",
+                color: const Color(0xffffab40),
+                child: IconButton(
+                  tooltip: lightMode ? "מצב כהה" : "מצב בהיר",
+                  onPressed: () {
+                    appLightMode.value = !appLightMode.value;
+                    setState(() {});
+                  },
+                  icon: Icon(lightMode ? Icons.dark_mode : Icons.light_mode),
+                ),
+              ),
+              _TopChip(
+                label: biometricName,
+                color: const Color(0xff40c4ff),
+                child: IconButton(
+                  tooltip: biometricEnabled
+                      ? "בטל כניסה עם $biometricName"
+                      : "הפעל כניסה עם $biometricName",
+                  onPressed: () async {
+                    try {
+                      final canAuth = await canUseFaceUnlock();
+                      if (!canAuth) {
+                        if (context.mounted)
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                "$biometricName לא זמין או לא מוגדר במכשיר",
+                              ),
+                            ),
+                          );
+                        return;
+                      }
+                      if (biometricEnabled) {
+                        // כיבוי
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.remove("bio_${widget.currentUser}");
+                        await clearSavedPin(widget.currentUser);
+                        if (mounted) setState(() => biometricEnabled = false);
+                        if (context.mounted)
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text("🔓 כניסה עם $biometricName בוטלה"),
+                            ),
+                          );
+                      } else {
+                        // הפעלה
+                        final auth = await askFaceUnlock();
+                        if (!auth) return;
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setBool("bio_${widget.currentUser}", true);
+                        await savePinSecurely(
+                          widget.currentUser,
+                          userPin(widget.currentUser),
+                        );
+                        if (mounted) setState(() => biometricEnabled = true);
+                        if (context.mounted)
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                "✅ כניסה עם $biometricName הופעלה עבור ${widget.currentUser}",
+                              ),
+                            ),
+                          );
+                      }
+                    } catch (e) {
+                      if (context.mounted)
+                        ScaffoldMessenger.of(
+                          context,
+                        ).showSnackBar(SnackBar(content: Text("שגיאה: $e")));
+                    }
+                  },
+                  icon: Icon(
+                    biometricLoginIcon,
+                    color: appLightMode.value
+                        ? const Color(0xff2a2f32)
+                        : biometricEnabled
+                        ? const Color(0xff00d4ff)
+                        : Colors.white38,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
       body: Builder(
         builder: (context) {
@@ -4807,7 +6875,7 @@ class _BroadcastExcludeButtonState extends State<_BroadcastExcludeButton> {
             Uri.parse("$api/api/toggle_broadcast_exclude/${widget.waId}"),
             headers: {
               "X-App-User": widget.currentUser,
-              "X-App-Pin": accessUserPins[widget.currentUser] ?? "",
+              "X-App-Pin": userPin(widget.currentUser),
             },
           )
           .timeout(const Duration(seconds: 10));
@@ -4991,6 +7059,7 @@ class AdminPage extends StatefulWidget {
 
 class _AdminPageState extends State<AdminPage> {
   bool loading = true;
+  bool cozyAiEnabled = true;
   bool saving = false;
   bool clearingLogs = false;
   String error = "";
@@ -5011,6 +7080,7 @@ class _AdminPageState extends State<AdminPage> {
   void initState() {
     super.initState();
     loadAdmin();
+    if (isSuperAdminUser(widget.currentUser)) loadCozyAiStatus();
   }
 
   Future<void> loadSentMessages({bool reset = false}) async {
@@ -5097,7 +7167,7 @@ class _AdminPageState extends State<AdminPage> {
 
   Map<String, dynamic> adminBody([Map<String, dynamic>? extra]) => {
     "user": widget.currentUser,
-    "pin": accessUserPins[widget.currentUser] ?? appPin,
+    "pin": userPin(widget.currentUser),
     ...?extra,
   };
 
@@ -5125,6 +7195,51 @@ class _AdminPageState extends State<AdminPage> {
       if (!silent) error = "לא הצלחתי לטעון. ודא שעדכנת את השרת.";
     } finally {
       loading = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> loadCozyAiStatus() async {
+    try {
+      final response = await http
+          .get(Uri.parse("$api/api/cozy-ai/status"))
+          .timeout(const Duration(seconds: 10));
+      final data = jsonDecode(response.body);
+      // המתג עצמו (לכולם). "enabled" לאדמין תמיד true, לכן מציגים את global_enabled
+      if (mounted) {
+        setState(
+          () => cozyAiEnabled =
+              (data["global_enabled"] ?? data["enabled"]) == true,
+        );
+      }
+    } catch (_) {}
+  }
+
+  Future<void> setCozyAiEnabled(bool enabled) async {
+    if (saving) return;
+    setState(() => saving = true);
+    try {
+      final response = await http
+          .post(
+            Uri.parse("$api/api/admin/cozy-ai"),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode(adminBody({"enabled": enabled})),
+          )
+          .timeout(const Duration(seconds: 10));
+      final data = jsonDecode(response.body);
+      if (response.statusCode >= 300 || data["ok"] != true) {
+        throw Exception();
+      }
+      if (mounted) setState(() => cozyAiEnabled = enabled);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("לא הצלחתי לעדכן את Cozy AI")),
+        );
+      }
+      await loadCozyAiStatus();
+    } finally {
+      saving = false;
       if (mounted) setState(() {});
     }
   }
@@ -5394,6 +7509,28 @@ class _AdminPageState extends State<AdminPage> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
+        if (isSuperAdminUser(widget.currentUser))
+        Card(
+          color: cozyAiEnabled
+              ? Colors.green.withValues(alpha: 0.14)
+              : Colors.red.withValues(alpha: 0.16),
+          child: SwitchListTile(
+            secondary: Icon(
+              cozyAiEnabled ? Icons.smart_toy : Icons.lock,
+              color: cozyAiEnabled ? Colors.greenAccent : Colors.redAccent,
+            ),
+            title: Text(
+              cozyAiEnabled
+                  ? "🤖 Cozy AI — פעיל לכולם 🟢"
+                  : "🤖 Cozy AI — כבוי לכולם 🔴 (רק לך פתוח)",
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: const Text("שליטה ב-Cozy AI באפליקציה ובאתר"),
+            value: cozyAiEnabled,
+            onChanged: saving ? null : setCozyAiEnabled,
+          ),
+        ),
+        const Divider(),
         ...users.map((u) => _userCard(u, light)),
         const SizedBox(height: 20),
       ],
@@ -5479,7 +7616,10 @@ class _AdminPageState extends State<AdminPage> {
                 ],
               ),
             ),
-            if (!isAdmin)
+            // admin הראשי יכול לחסום גם את עידן (הנהלה); אף אחד לא חוסם את admin
+            if (!isAdmin ||
+                (isSuperAdminUser(widget.currentUser) &&
+                    !isSuperAdminUser(username)))
               FilledButton(
                 onPressed: saving
                     ? null
@@ -6134,7 +8274,8 @@ class _ChatPageState extends State<ChatPage>
       if (mounted) setState(() => playingAudioUrl = "");
     });
     unawaited(loadPinnedMessages().then((_) => load()));
-    timer = Timer.periodic(const Duration(seconds: 2), (_) {
+    // realtime כבר מרענן מיד כשמגיעה הודעה — הטיימר הוא רק גיבוי
+    timer = Timer.periodic(const Duration(seconds: 6), (_) {
       if (mounted) {
         load(silent: true, incremental: true);
       }
@@ -6326,6 +8467,88 @@ class _ChatPageState extends State<ChatPage>
   Future<void> transcribeAudio(String media) =>
       transcribeMedia(media, label: "ההודעה הקולית");
 
+  // ===== שינוי מדינה ללקוח (מספר משותף) =====
+  Future<void> _openSwitchCountry() async {
+    List group = [];
+    try {
+      final r = await http
+          .get(Uri.parse("$api/api/country_group").replace(
+            queryParameters: {"country": widget.country, "wa_id": widget.waId},
+          ))
+          .timeout(const Duration(seconds: 8));
+      final data = jsonDecode(r.body);
+      if (data is Map && data["countries"] is List) group = data["countries"];
+    } catch (_) {}
+    if (!mounted) return;
+    if (group.length < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("המספר הזה משרת מדינה אחת בלבד")),
+      );
+      return;
+    }
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: Text(
+                "🔄 לאיזו מדינה להעביר את הלקוח?",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+            for (final c in group)
+              ListTile(
+                leading: Text("${c["flag"] ?? "🌍"}",
+                    style: const TextStyle(fontSize: 22)),
+                title: Text("${c["name_he"] ?? c["name"] ?? c["code"]}"),
+                trailing: "${c["code"]}" == widget.country
+                    ? const Icon(Icons.check, color: Color(0xff00a884))
+                    : null,
+                onTap: () => Navigator.pop(ctx, "${c["code"]}"),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || picked == widget.country || !mounted) return;
+    try {
+      final r = await http
+          .post(
+            Uri.parse("$api/api/switch_contact_country"),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({"wa_id": widget.waId, "country": picked}),
+          )
+          .timeout(const Duration(seconds: 10));
+      final ok = r.statusCode >= 200 && r.statusCode < 300;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ok ? "✅ הלקוח הועבר" : "❌ השינוי נכשל")),
+      );
+      if (ok) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ChatPage(
+              waId: widget.waId,
+              name: widget.name,
+              country: picked,
+              currentUser: widget.currentUser,
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("❌ אין חיבור לשרת")),
+      );
+    }
+  }
+
   Future<void> load({bool silent = false, bool incremental = false}) async {
     if (_loadingMessages) return;
     _loadingMessages = true;
@@ -6353,6 +8576,9 @@ class _ChatPageState extends State<ChatPage>
       final uri = Uri.parse("$api/api/messages").replace(
         queryParameters: {
           "wa_id": widget.waId,
+          // צ'אט נפרד לכל מדינה: מבקשים רק את ההודעות של המדינה של השיחה
+          if (widget.country.trim().isNotEmpty && widget.country != "all")
+            "country": widget.country,
           if (incremental && lastKnownId > 0) "since_id": "$lastKnownId",
         },
       );
@@ -6441,20 +8667,19 @@ class _ChatPageState extends State<ChatPage>
     if (text.isEmpty || sending) return;
     setState(() => sending = true);
     try {
-      final uri = Uri.https("translate.googleapis.com", "/translate_a/single", {
-        "client": "gtx",
-        "sl": "auto",
-        "tl": targetLang,
-        "dt": "t",
-        "q": text,
-      });
-      final r = await http.get(uri).timeout(const Duration(seconds: 10));
-      final data = jsonDecode(r.body);
-      final translated = (data[0] as List)
-          .map((p) => p[0] ?? "")
-          .join("")
-          .trim();
-      final msg = translated.isNotEmpty ? translated : text;
+      // תרגום דרך השרת (ואם הוא נכשל — גוגל ישירות). אם גם זה נכשל לא שולחים,
+      // כדי שהלקוח לא יקבל את ההודעה בעברית.
+      final translated = await translateOnly(text, target: targetLang);
+      if (!isUsefulTranslation(
+            original: text,
+            translated: translated,
+            target: targetLang,
+          ) ||
+          (targetLang != "he" &&
+              RegExp(r"[\u0590-\u05ff]").hasMatch(translated))) {
+        showSnack("התרגום נכשל. ההודעה לא נשלחה — נסה שוב.");
+        return;
+      }
       final r2 = await http
           .post(
             Uri.parse(api + "/api/send"),
@@ -6462,21 +8687,24 @@ class _ChatPageState extends State<ChatPage>
             body: jsonEncode({
               "wa_id": widget.waId,
               "sender": widget.currentUser,
-              "msg": msg,
+              "msg": translated,
               "country": widget.country,
+              "reply_to_id": replyingTo?["id"],
+              "reply_to_text": replyingTo?["text"],
             }),
           )
           .timeout(const Duration(seconds: 15));
       if (r2.statusCode >= 200 && r2.statusCode < 300) {
         txt.clear();
+        setState(() => replyingTo = null);
         await load(silent: true);
         scrollToBottom();
         showSnack("נשלח ב-" + targetLang.toUpperCase());
       } else {
-        showSnack("שגיאה בשליחה");
+        showSnack(sendErrorMessage(r2.statusCode, r2.body));
       }
     } catch (e) {
-      showSnack("שגיאה: " + e.toString());
+      showSnack("לא הצלחתי לשלוח. בדוק אינטרנט ונסה שוב.");
     } finally {
       if (mounted) setState(() => sending = false);
     }
@@ -6545,7 +8773,9 @@ class _ChatPageState extends State<ChatPage>
           )
           .timeout(const Duration(seconds: 12));
       final data = jsonDecode(r.body);
-      final translated = "${data["translated"] ?? text}".trim();
+      final translated = data["ok"] == false
+          ? ""
+          : "${data["translated"] ?? text}".trim();
       if (isUsefulTranslation(
         original: original,
         translated: translated,
@@ -7579,7 +9809,7 @@ class _ChatPageState extends State<ChatPage>
     }
 
     // אדמין — הצג אפשרות מחיקה לכולם
-    final isAdmin = widget.currentUser == "admin";
+    final isAdmin = isManagerUser(widget.currentUser);
     final isOut = (m["direction"] ?? "") == "out";
 
     String? choice;
@@ -8652,6 +10882,11 @@ class _ChatPageState extends State<ChatPage>
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: "שנה מדינה",
+            onPressed: _openSwitchCountry,
+            icon: const Icon(Icons.public),
+          ),
           IconButton(
             tooltip: _showFavoritesOnly ? "כל ההודעות" : "מועדפים",
             onPressed: () {
@@ -10142,6 +12377,109 @@ class _EmojiStickerPanelState extends State<_EmojiStickerPanel> {
                     );
                   },
                 ),
+        ),
+      ],
+    );
+  }
+}
+
+/// שורת כפתורים עליונה: קפסולה אחת עם עיגולים צבעוניים ותוויות קטנות
+class _TopButtonsBar extends StatelessWidget {
+  final List<Widget> buttons;
+  const _TopButtonsBar({required this.buttons});
+
+  @override
+  Widget build(BuildContext context) {
+    final light = appLightMode.value;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+      padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 6),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: light
+              ? const [Color(0xfff7f9fb), Color(0xffe9eef3)]
+              : const [Color(0xff10283f), Color(0xff081726)],
+        ),
+        borderRadius: BorderRadius.circular(32),
+        border: Border.all(
+          color: light
+              ? const Color(0x22000000)
+              : const Color(0xff00d4ff).withValues(alpha: 0.35),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xff00d4ff).withValues(alpha: light ? 0 : 0.10),
+            blurRadius: 16,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: buttons,
+      ),
+    );
+  }
+}
+
+/// עיגול צבעוני עם אייקון ותווית קטנה מתחת
+class _TopChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  final Widget child;
+  const _TopChip({
+    required this.label,
+    required this.color,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final light = appLightMode.value;
+    final c = light ? Color.lerp(color, Colors.black, 0.35)! : color;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [c.withValues(alpha: 0.30), c.withValues(alpha: 0.10)],
+            ),
+            border: Border.all(color: c.withValues(alpha: 0.75), width: 1.4),
+            boxShadow: [
+              BoxShadow(color: c.withValues(alpha: 0.22), blurRadius: 10),
+            ],
+          ),
+          child: Theme(
+            data: Theme.of(context).copyWith(
+              iconButtonTheme: IconButtonThemeData(
+                style: IconButton.styleFrom(
+                  foregroundColor: c,
+                  backgroundColor: Colors.transparent,
+                  minimumSize: const Size(48, 48),
+                  padding: EdgeInsets.zero,
+                ),
+              ),
+            ),
+            child: Center(child: child),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 10.5,
+            fontWeight: FontWeight.w700,
+            color: c.withValues(alpha: 0.95),
+          ),
         ),
       ],
     );
