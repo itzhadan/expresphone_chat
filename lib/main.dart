@@ -1243,7 +1243,7 @@ class ExpresphoneApp extends StatelessWidget {
           scaffoldBackgroundColor: const Color(0xff040c18),
           fontFamily: '.SF Pro Display',
         ),
-        home: const IntroSplashPage(),
+        home: const PinPage(),
       ),
     );
   }
