@@ -1218,6 +1218,11 @@ void main() {
   );
 }
 
+// Build label shown at the bottom of the login screen.
+// Codemagic passes the build number with --dart-define=APP_BUILD=...
+const String kAppBuild = String.fromEnvironment('APP_BUILD', defaultValue: 'dev');
+const String kAppVersionLabel = 'cozycrafts \u00b7 build ' + kAppBuild;
+
 class ExpresphoneApp extends StatelessWidget {
   const ExpresphoneApp({super.key});
 
@@ -1587,6 +1592,18 @@ class _PinPageState extends State<PinPage> {
 
     return Scaffold(
       backgroundColor: const Color(0xff071525),
+      // build label - so we always know which version is installed
+      bottomNavigationBar: const SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.only(top: 2, bottom: 4),
+          child: Text(
+            kAppVersionLabel,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Color(0x99ffffff), fontSize: 11),
+          ),
+        ),
+      ),
       body: Column(
         children: [
           SafeArea(
