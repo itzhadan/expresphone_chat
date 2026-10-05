@@ -8491,7 +8491,7 @@ class _ChatPageState extends State<ChatPage>
       final r = await http
           .get(Uri.parse("$api/api/country_group").replace(
             queryParameters: {"country": widget.country, "wa_id": widget.waId},
-          ))
+          ), headers: {"X-App-User": widget.currentUser, "X-App-Pin": userPin(widget.currentUser)})
           .timeout(const Duration(seconds: 8));
       final data = jsonDecode(r.body);
       if (data is Map && data["countries"] is List) group = data["countries"];
@@ -8536,7 +8536,7 @@ class _ChatPageState extends State<ChatPage>
       final r = await http
           .post(
             Uri.parse("$api/api/switch_contact_country"),
-            headers: {"Content-Type": "application/json"},
+            headers: {"Content-Type": "application/json", "X-App-User": widget.currentUser, "X-App-Pin": userPin(widget.currentUser)},
             body: jsonEncode({"wa_id": widget.waId, "country": picked}),
           )
           .timeout(const Duration(seconds: 10));
@@ -8749,6 +8749,8 @@ class _ChatPageState extends State<ChatPage>
             Uri.parse("$api/api/send"),
             headers: {"Content-Type": "application/json"},
             body: jsonEncode({
+              "user": widget.currentUser,
+              "pin": userPin(widget.currentUser),
               "wa_id": widget.waId,
               "sender": widget.currentUser,
               "msg": text,
@@ -9508,6 +9510,8 @@ class _ChatPageState extends State<ChatPage>
             Uri.parse("$api/api/send"),
             headers: {"Content-Type": "application/json"},
             body: jsonEncode({
+              "user": widget.currentUser,
+              "pin": userPin(widget.currentUser),
               "wa_id": widget.waId,
               "sender": widget.currentUser,
               "msg": msg,
@@ -9640,6 +9644,8 @@ class _ChatPageState extends State<ChatPage>
             Uri.parse("$api/api/send"),
             headers: {"Content-Type": "application/json"},
             body: jsonEncode({
+              "user": widget.currentUser,
+              "pin": userPin(widget.currentUser),
               "wa_id": widget.waId,
               "sender": widget.currentUser,
               "msg": msg,
